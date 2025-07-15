@@ -1,0 +1,771 @@
+From 0b437237624f76dfeb222aeead570e48dcd0a640 Mon Sep 17 00:00:00 2001
+From: Nomis101 <Nomis101@web.de>
+Date: Tue, 15 Jul 2025 20:35:39 +0200
+Subject: HDR-variance-boost
+
+Signed-off-by: Nomis101 <Nomis101@web.de>
+---
+ Source/API/EbSvtAv1Enc.h                |   3 +-
+ Source/App/app_config.c                 |   2 +-
+ Source/Lib/Codec/entropy_coding.c       |   9 +-
+ Source/Lib/Codec/full_loop.c            |   3 +-
+ Source/Lib/Codec/pcs.c                  |   4 +
+ Source/Lib/Codec/pcs.h                  |   3 +-
+ Source/Lib/Codec/pic_analysis_process.c | 288 +++---------------------
+ Source/Lib/Codec/rc_process.c           | 145 +++++++++---
+ Source/Lib/Codec/segmentation.c         |   8 +-
+ Source/Lib/Globals/enc_handle.c         |   6 +
+ Source/Lib/Globals/enc_settings.c       |   4 +-
+ 11 files changed, 165 insertions(+), 310 deletions(-)
+
+diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
+index 84fdc455..55f410a2 100644
+--- a/Source/API/EbSvtAv1Enc.h
++++ b/Source/API/EbSvtAv1Enc.h
+@@ -967,7 +967,8 @@ typedef struct EbSvtAv1EncConfiguration {
+      *  0: default curve
+      *  1: low-medium contrast boost curve
+      *  2: still picture curve, tuned for SSIMULACRA2 performance on the CID22 Validation Set
+-     *  Default is 0. */
++     *  3: PQ-optimized perceptual curve
++     *  Default is 0, or 3 if encoding PQ transfer content */
+     uint8_t variance_boost_curve;
+ 
+     /* @brief Frame-level luminance-based QP bias to improve quality in low luma scenarios
+diff --git a/Source/App/app_config.c b/Source/App/app_config.c
+index f208e07b..a7b7aebe 100644
+--- a/Source/App/app_config.c
++++ b/Source/App/app_config.c
+@@ -942,7 +942,7 @@ ConfigDescription config_entry_variance_boost[] = {
+     {ENABLE_VARIANCE_BOOST_TOKEN, "Enable variance boost, default is 0 [0-1]"},
+     {VARIANCE_BOOST_STRENGTH_TOKEN, "Variance boost strength, default is 2 [1-4]"},
+     {VARIANCE_OCTILE_TOKEN, "Octile for variance boost, default is 6 [1-8]"},
+-    {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-2]"},
++    {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-3]"},
+     // Termination
+     {NULL, NULL}};
+ 
+diff --git a/Source/Lib/Codec/entropy_coding.c b/Source/Lib/Codec/entropy_coding.c
+index c3aa3cae..468d04c8 100644
+--- a/Source/Lib/Codec/entropy_coding.c
++++ b/Source/Lib/Codec/entropy_coding.c
+@@ -2579,9 +2579,7 @@ static void encode_quantization(const PictureParentControlSet *const pcs, struct
+     const FrameHeader *frm_hdr = &pcs->frm_hdr;
+     svt_aom_wb_write_literal(wb, frm_hdr->quantization_params.base_q_idx, QINDEX_BITS);
+     write_delta_q(wb, frm_hdr->quantization_params.delta_q_dc[AOM_PLANE_Y]);
+-    int32_t diff_uv_delta = (frm_hdr->quantization_params.delta_q_dc[AOM_PLANE_U] !=
+-                             frm_hdr->quantization_params.delta_q_dc[AOM_PLANE_V]) ||
+-        (frm_hdr->quantization_params.delta_q_ac[AOM_PLANE_U] != frm_hdr->quantization_params.delta_q_ac[AOM_PLANE_V]);
++    int32_t diff_uv_delta = true;
+ 
+     if (diff_uv_delta)
+         svt_aom_wb_write_bit(wb, diff_uv_delta);
+@@ -2935,10 +2933,7 @@ static AOM_INLINE void write_color_config(const SequenceControlSet *const scs, s
+             svt_aom_wb_write_literal(wb, scs->static_config.chroma_sample_position, 2);
+         }
+     }
+-    bool separate_uv_delta_q = (scs->static_config.chroma_u_ac_qindex_offset !=
+-                                    scs->static_config.chroma_v_ac_qindex_offset ||
+-                                scs->static_config.chroma_u_dc_qindex_offset !=
+-                                    scs->static_config.chroma_v_dc_qindex_offset);
++    bool separate_uv_delta_q = true;
+     svt_aom_wb_write_bit(wb, separate_uv_delta_q);
+ }
+ 
+diff --git a/Source/Lib/Codec/full_loop.c b/Source/Lib/Codec/full_loop.c
+index 4d0daa6b..adb2ad80 100644
+--- a/Source/Lib/Codec/full_loop.c
++++ b/Source/Lib/Codec/full_loop.c
+@@ -1480,7 +1480,8 @@ uint8_t svt_aom_quantize_inv_quantize(PictureControlSet *pcs, ModeDecisionContex
+                                       uint32_t lambda, bool is_encode_pass) {
+     SequenceControlSet *scs     = pcs->scs;
+     EncodeContext      *enc_ctx = scs->enc_ctx;
+-    int32_t plane = component_type == COMPONENT_LUMA ? AOM_PLANE_Y : COMPONENT_CHROMA_CB ? AOM_PLANE_U : AOM_PLANE_V;
++    int32_t plane = component_type == COMPONENT_LUMA ? AOM_PLANE_Y : (component_type == COMPONENT_CHROMA_CB ?
++        AOM_PLANE_U : AOM_PLANE_V);
+ 
+     int32_t qmatrix_level = (IS_2D_TRANSFORM(tx_type) && pcs->ppcs->frm_hdr.quantization_params.using_qmatrix)
+         ? pcs->ppcs->frm_hdr.quantization_params.qm[plane]
+diff --git a/Source/Lib/Codec/pcs.c b/Source/Lib/Codec/pcs.c
+index b79a16f3..2036e2f2 100644
+--- a/Source/Lib/Codec/pcs.c
++++ b/Source/Lib/Codec/pcs.c
+@@ -1237,6 +1237,9 @@ static void picture_parent_control_set_dctor(EbPtr ptr) {
+     if (obj->is_chroma_downsampled_picture_ptr_owner)
+         EB_DELETE(obj->chroma_downsampled_pic);
+ 
++    if (obj->mean)
++        EB_FREE_ARRAY(obj->mean);
++
+     if (obj->variance)
+         EB_FREE_2D(obj->variance);
+ 
+@@ -1393,6 +1396,7 @@ static EbErrorType picture_parent_control_set_ctor(PictureParentControlSet *obje
+             block_count = 85;
+         else
+             block_count = 1;
++        EB_MALLOC_ARRAY(object_ptr->mean, object_ptr->b64_total_count);
+         EB_MALLOC_2D(object_ptr->variance, object_ptr->b64_total_count, block_count);
+     }
+     if (init_data_ptr->calc_hist) {
+diff --git a/Source/Lib/Codec/pcs.h b/Source/Lib/Codec/pcs.h
+index 1fc5b0cf..26cf5d72 100644
+--- a/Source/Lib/Codec/pcs.h
++++ b/Source/Lib/Codec/pcs.h
+@@ -937,7 +937,8 @@ typedef struct PictureParentControlSet {
+     // Pre Analysis
+     EbObjectWrapper *ref_pa_pic_ptr_array[MAX_NUM_OF_REF_PIC_LIST][REF_LIST_MAX_DEPTH];
+     uint64_t         ref_pic_poc_array[MAX_NUM_OF_REF_PIC_LIST][REF_LIST_MAX_DEPTH];
+-    uint16_t       **variance;
++    double         **variance;
++    uint64_t         *mean;
+     uint32_t         pre_assignment_buffer_count;
+     uint16_t         pic_avg_variance;
+ 
+diff --git a/Source/Lib/Codec/pic_analysis_process.c b/Source/Lib/Codec/pic_analysis_process.c
+index f8655632..c291dd0a 100644
+--- a/Source/Lib/Codec/pic_analysis_process.c
++++ b/Source/Lib/Codec/pic_analysis_process.c
+@@ -1101,6 +1101,9 @@ static EbErrorType compute_block_mean_compute_variance(
+     mean_of_64x64_blocks = (mean_of_32x32_blocks[0] + mean_of_32x32_blocks[1] + mean_of_32x32_blocks[2] +
+                             mean_of_32x32_blocks[3]) >>
+         2;
++
++    pcs->mean[sb_index] = mean_of_64x64_blocks;
++
+     mean_of64x64_squared_values_blocks = (mean_of32x32_squared_values_blocks[0] +
+                                           mean_of32x32_squared_values_blocks[1] +
+                                           mean_of32x32_squared_values_blocks[2] +
+@@ -1108,273 +1111,36 @@ static EbErrorType compute_block_mean_compute_variance(
+         2;
+     // 8x8 variances
+     if (scs->static_config.enable_adaptive_quantization == 1 || scs->static_config.variance_octile) {
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_0] = (uint16_t)((mean_of_8x8_squared_values_blocks[0] -
+-                                                                     (mean_of8x8_blocks[0] * mean_of8x8_blocks[0])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_1] = (uint16_t)((mean_of_8x8_squared_values_blocks[1] -
+-                                                                     (mean_of8x8_blocks[1] * mean_of8x8_blocks[1])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_2] = (uint16_t)((mean_of_8x8_squared_values_blocks[2] -
+-                                                                     (mean_of8x8_blocks[2] * mean_of8x8_blocks[2])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_3] = (uint16_t)((mean_of_8x8_squared_values_blocks[3] -
+-                                                                     (mean_of8x8_blocks[3] * mean_of8x8_blocks[3])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_4] = (uint16_t)((mean_of_8x8_squared_values_blocks[4] -
+-                                                                     (mean_of8x8_blocks[4] * mean_of8x8_blocks[4])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_5] = (uint16_t)((mean_of_8x8_squared_values_blocks[5] -
+-                                                                     (mean_of8x8_blocks[5] * mean_of8x8_blocks[5])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_6] = (uint16_t)((mean_of_8x8_squared_values_blocks[6] -
+-                                                                     (mean_of8x8_blocks[6] * mean_of8x8_blocks[6])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_7] = (uint16_t)((mean_of_8x8_squared_values_blocks[7] -
+-                                                                     (mean_of8x8_blocks[7] * mean_of8x8_blocks[7])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_8] = (uint16_t)((mean_of_8x8_squared_values_blocks[8] -
+-                                                                     (mean_of8x8_blocks[8] * mean_of8x8_blocks[8])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_9] = (uint16_t)((mean_of_8x8_squared_values_blocks[9] -
+-                                                                     (mean_of8x8_blocks[9] * mean_of8x8_blocks[9])) >>
+-                                                                    VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_10] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[10] - (mean_of8x8_blocks[10] * mean_of8x8_blocks[10])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_11] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[11] - (mean_of8x8_blocks[11] * mean_of8x8_blocks[11])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_12] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[12] - (mean_of8x8_blocks[12] * mean_of8x8_blocks[12])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_13] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[13] - (mean_of8x8_blocks[13] * mean_of8x8_blocks[13])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_14] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[14] - (mean_of8x8_blocks[14] * mean_of8x8_blocks[14])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_15] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[15] - (mean_of8x8_blocks[15] * mean_of8x8_blocks[15])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_16] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[16] - (mean_of8x8_blocks[16] * mean_of8x8_blocks[16])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_17] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[17] - (mean_of8x8_blocks[17] * mean_of8x8_blocks[17])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_18] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[18] - (mean_of8x8_blocks[18] * mean_of8x8_blocks[18])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_19] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[19] - (mean_of8x8_blocks[19] * mean_of8x8_blocks[19])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_20] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[20] - (mean_of8x8_blocks[20] * mean_of8x8_blocks[20])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_21] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[21] - (mean_of8x8_blocks[21] * mean_of8x8_blocks[21])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_22] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[22] - (mean_of8x8_blocks[22] * mean_of8x8_blocks[22])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_23] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[23] - (mean_of8x8_blocks[23] * mean_of8x8_blocks[23])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_24] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[24] - (mean_of8x8_blocks[24] * mean_of8x8_blocks[24])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_25] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[25] - (mean_of8x8_blocks[25] * mean_of8x8_blocks[25])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_26] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[26] - (mean_of8x8_blocks[26] * mean_of8x8_blocks[26])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_27] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[27] - (mean_of8x8_blocks[27] * mean_of8x8_blocks[27])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_28] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[28] - (mean_of8x8_blocks[28] * mean_of8x8_blocks[28])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_29] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[29] - (mean_of8x8_blocks[29] * mean_of8x8_blocks[29])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_30] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[30] - (mean_of8x8_blocks[30] * mean_of8x8_blocks[30])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_31] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[31] - (mean_of8x8_blocks[31] * mean_of8x8_blocks[31])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_32] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[32] - (mean_of8x8_blocks[32] * mean_of8x8_blocks[32])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_33] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[33] - (mean_of8x8_blocks[33] * mean_of8x8_blocks[33])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_34] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[34] - (mean_of8x8_blocks[34] * mean_of8x8_blocks[34])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_35] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[35] - (mean_of8x8_blocks[35] * mean_of8x8_blocks[35])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_36] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[36] - (mean_of8x8_blocks[36] * mean_of8x8_blocks[36])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_37] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[37] - (mean_of8x8_blocks[37] * mean_of8x8_blocks[37])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_38] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[38] - (mean_of8x8_blocks[38] * mean_of8x8_blocks[38])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_39] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[39] - (mean_of8x8_blocks[39] * mean_of8x8_blocks[39])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_40] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[40] - (mean_of8x8_blocks[40] * mean_of8x8_blocks[40])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_41] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[41] - (mean_of8x8_blocks[41] * mean_of8x8_blocks[41])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_42] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[42] - (mean_of8x8_blocks[42] * mean_of8x8_blocks[42])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_43] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[43] - (mean_of8x8_blocks[43] * mean_of8x8_blocks[43])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_44] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[44] - (mean_of8x8_blocks[44] * mean_of8x8_blocks[44])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_45] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[45] - (mean_of8x8_blocks[45] * mean_of8x8_blocks[45])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_46] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[46] - (mean_of8x8_blocks[46] * mean_of8x8_blocks[46])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_47] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[47] - (mean_of8x8_blocks[47] * mean_of8x8_blocks[47])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_48] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[48] - (mean_of8x8_blocks[48] * mean_of8x8_blocks[48])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_49] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[49] - (mean_of8x8_blocks[49] * mean_of8x8_blocks[49])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_50] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[50] - (mean_of8x8_blocks[50] * mean_of8x8_blocks[50])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_51] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[51] - (mean_of8x8_blocks[51] * mean_of8x8_blocks[51])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_52] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[52] - (mean_of8x8_blocks[52] * mean_of8x8_blocks[52])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_53] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[53] - (mean_of8x8_blocks[53] * mean_of8x8_blocks[53])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_54] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[54] - (mean_of8x8_blocks[54] * mean_of8x8_blocks[54])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_55] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[55] - (mean_of8x8_blocks[55] * mean_of8x8_blocks[55])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_56] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[56] - (mean_of8x8_blocks[56] * mean_of8x8_blocks[56])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_57] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[57] - (mean_of8x8_blocks[57] * mean_of8x8_blocks[57])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_58] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[58] - (mean_of8x8_blocks[58] * mean_of8x8_blocks[58])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_59] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[59] - (mean_of8x8_blocks[59] * mean_of8x8_blocks[59])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_60] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[60] - (mean_of8x8_blocks[60] * mean_of8x8_blocks[60])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_61] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[61] - (mean_of8x8_blocks[61] * mean_of8x8_blocks[61])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_62] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[62] - (mean_of8x8_blocks[62] * mean_of8x8_blocks[62])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_8x8_63] =
+-            (uint16_t)((mean_of_8x8_squared_values_blocks[63] - (mean_of8x8_blocks[63] * mean_of8x8_blocks[63])) >>
+-                       VARIANCE_PRECISION);
++        for (uint64_t idx = ME_TIER_ZERO_PU_8x8_0; idx <= ME_TIER_ZERO_PU_8x8_63; idx++) {
++            uint64_t mean_idx = idx - ME_TIER_ZERO_PU_8x8_0;
++
++            pcs->variance[sb_index][idx] = (double)(mean_of_8x8_squared_values_blocks[mean_idx] -
++                                                    (mean_of8x8_blocks[mean_idx] * mean_of8x8_blocks[mean_idx])) /
++                (1 << VARIANCE_PRECISION);
++        }
+ 
+         // 16x16 variances
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_0] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[0] - (mean_of_16x16_blocks[0] * mean_of_16x16_blocks[0])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_1] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[1] - (mean_of_16x16_blocks[1] * mean_of_16x16_blocks[1])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_2] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[2] - (mean_of_16x16_blocks[2] * mean_of_16x16_blocks[2])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_3] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[3] - (mean_of_16x16_blocks[3] * mean_of_16x16_blocks[3])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_4] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[4] - (mean_of_16x16_blocks[4] * mean_of_16x16_blocks[4])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_5] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[5] - (mean_of_16x16_blocks[5] * mean_of_16x16_blocks[5])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_6] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[6] - (mean_of_16x16_blocks[6] * mean_of_16x16_blocks[6])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_7] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[7] - (mean_of_16x16_blocks[7] * mean_of_16x16_blocks[7])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_8] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[8] - (mean_of_16x16_blocks[8] * mean_of_16x16_blocks[8])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_9] =
+-            (uint16_t)((mean_of16x16_squared_values_blocks[9] - (mean_of_16x16_blocks[9] * mean_of_16x16_blocks[9])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_10] = (uint16_t)((mean_of16x16_squared_values_blocks[10] -
+-                                                                        (mean_of_16x16_blocks[10] *
+-                                                                         mean_of_16x16_blocks[10])) >>
+-                                                                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_11] = (uint16_t)((mean_of16x16_squared_values_blocks[11] -
+-                                                                        (mean_of_16x16_blocks[11] *
+-                                                                         mean_of_16x16_blocks[11])) >>
+-                                                                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_12] = (uint16_t)((mean_of16x16_squared_values_blocks[12] -
+-                                                                        (mean_of_16x16_blocks[12] *
+-                                                                         mean_of_16x16_blocks[12])) >>
+-                                                                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_13] = (uint16_t)((mean_of16x16_squared_values_blocks[13] -
+-                                                                        (mean_of_16x16_blocks[13] *
+-                                                                         mean_of_16x16_blocks[13])) >>
+-                                                                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_14] = (uint16_t)((mean_of16x16_squared_values_blocks[14] -
+-                                                                        (mean_of_16x16_blocks[14] *
+-                                                                         mean_of_16x16_blocks[14])) >>
+-                                                                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_16x16_15] = (uint16_t)((mean_of16x16_squared_values_blocks[15] -
+-                                                                        (mean_of_16x16_blocks[15] *
+-                                                                         mean_of_16x16_blocks[15])) >>
+-                                                                       VARIANCE_PRECISION);
++        for (uint64_t idx = ME_TIER_ZERO_PU_16x16_0; idx <= ME_TIER_ZERO_PU_16x16_15; idx++) {
++            uint64_t mean_idx = idx - ME_TIER_ZERO_PU_16x16_0;
++
++            pcs->variance[sb_index][idx] = (double)(mean_of16x16_squared_values_blocks[mean_idx] -
++                                                    (mean_of_16x16_blocks[mean_idx] * mean_of_16x16_blocks[mean_idx])) /
++                (1 << VARIANCE_PRECISION);
++        }
+ 
+         // 32x32 variances
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_32x32_0] =
+-            (uint16_t)((mean_of32x32_squared_values_blocks[0] - (mean_of_32x32_blocks[0] * mean_of_32x32_blocks[0])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_32x32_1] =
+-            (uint16_t)((mean_of32x32_squared_values_blocks[1] - (mean_of_32x32_blocks[1] * mean_of_32x32_blocks[1])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_32x32_2] =
+-            (uint16_t)((mean_of32x32_squared_values_blocks[2] - (mean_of_32x32_blocks[2] * mean_of_32x32_blocks[2])) >>
+-                       VARIANCE_PRECISION);
+-        pcs->variance[sb_index][ME_TIER_ZERO_PU_32x32_3] =
+-            (uint16_t)((mean_of32x32_squared_values_blocks[3] - (mean_of_32x32_blocks[3] * mean_of_32x32_blocks[3])) >>
+-                       VARIANCE_PRECISION);
++        for (uint64_t idx = ME_TIER_ZERO_PU_32x32_0; idx <= ME_TIER_ZERO_PU_32x32_3; idx++) {
++            uint64_t mean_idx = idx - ME_TIER_ZERO_PU_32x32_0;
++
++            pcs->variance[sb_index][idx] = (double)(mean_of32x32_squared_values_blocks[mean_idx] -
++                                                    (mean_of_32x32_blocks[mean_idx] * mean_of_32x32_blocks[mean_idx])) /
++                (1 << VARIANCE_PRECISION);
++        }
+     }
+     // 64x64 variance
+-    pcs->variance[sb_index][ME_TIER_ZERO_PU_64x64] = (uint16_t)((mean_of64x64_squared_values_blocks -
+-                                                                 (mean_of_64x64_blocks * mean_of_64x64_blocks)) >>
+-                                                                VARIANCE_PRECISION);
++    pcs->variance[sb_index][ME_TIER_ZERO_PU_64x64] = (double)(mean_of64x64_squared_values_blocks -
++                                                              (mean_of_64x64_blocks * mean_of_64x64_blocks)) /
++        (1 << VARIANCE_PRECISION);
+ 
+     return return_error;
+ }
+diff --git a/Source/Lib/Codec/rc_process.c b/Source/Lib/Codec/rc_process.c
+index e3a75c7c..4378096d 100644
+--- a/Source/Lib/Codec/rc_process.c
++++ b/Source/Lib/Codec/rc_process.c
+@@ -1665,8 +1665,15 @@ static void generate_b64_me_qindex_map(PictureControlSet *pcs) {
+     }
+ }
+ 
+-int variance_comp_int(const void *a, const void *b) { return (int)*(uint16_t *)a - *(uint16_t *)b; }
++int variance_comp_double(const void *a, const void *b) {
++    double aval = *(double *)a;
++    double bval = *(double *)b;
+ 
++    return aval > bval ? 1 : (aval < bval ? -1 : 0);
++}
++
++#define VAR_BOOST_MAX_PQ_DELTAQ_RANGE 120
++#define VAR_BOOST_MAX_PQ_QSTEP_RATIO_BOOST 14
+ #define VAR_BOOST_MAX_DELTAQ_RANGE 80
+ #define VAR_BOOST_MAX_QSTEP_RATIO_BOOST 8
+ 
+@@ -1676,7 +1683,7 @@ int variance_comp_int(const void *a, const void *b) { return (int)*(uint16_t *)a
+ #define SUBBLOCKS_IN_SB (SUBBLOCKS_IN_SB_DIM * SUBBLOCKS_IN_SB_DIM)
+ #define SUBBLOCKS_IN_OCTILE (SUBBLOCKS_IN_SB / 8)
+ 
+-static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *variances, uint8_t strength,
++static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint64_t mean, double *variances, uint8_t strength,
+                                             EbBitDepth bit_depth, uint8_t octile, uint8_t curve) {
+     // boost q_index based on empirical visual testing, strength 2
+     // variance     qstep_ratio boost (@ base_q_idx 255)
+@@ -1687,37 +1694,39 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+     // 1            4.806
+ 
+     // copy sb 8x8 variance values to an array for ordering
+-    uint16_t ordered_variances[64];
+-    memcpy(&ordered_variances, variances + ME_TIER_ZERO_PU_8x8_0, sizeof(uint16_t) * 64);
+-    qsort(&ordered_variances, 64, sizeof(uint16_t), variance_comp_int);
++    double ordered_variances[64];
++    memcpy(&ordered_variances, variances + ME_TIER_ZERO_PU_8x8_0, sizeof(double) * 64);
++    qsort(&ordered_variances, 64, sizeof(double), variance_comp_double);
+ 
+-    // Sample three 8x8 variance values: at the specified octile, previous octile,
+-    // and next octile. Make sure we use the last subblock in each octile as the
+-    // representative of the octile.
+     assert(octile >= 1 && octile <= 8);
++
++    // Sample three 8x8 variance values:
++    // - at the specified octile
++    // - previous octile
++    // - next octile
++    // Make sure we use the last subblock in each octile as the
++    // representative of the octile.
+     const int mid_idx = octile * SUBBLOCKS_IN_OCTILE - 1;
+     const int low_idx = AOMMAX(SUBBLOCKS_IN_OCTILE - 1, mid_idx - SUBBLOCKS_IN_OCTILE);
+     const int upp_idx = AOMMIN(SUBBLOCKS_IN_SB - 1, mid_idx + SUBBLOCKS_IN_OCTILE);
+ 
+-    // Weigh the three variances in a 1:2:1 ratio, with rounding (the +2 term).
++    // Weigh the three variances in a 1:2:1 ratio.
+     // This allows for smoother delta-q transitions among superblocks with
+     // mixed-variance features.
+-    uint16_t variance = (ordered_variances[low_idx] + (ordered_variances[mid_idx] * 2) + ordered_variances[upp_idx] +
+-                         2) /
+-        4;
++    double variance = (ordered_variances[low_idx] + 2 * ordered_variances[mid_idx] + ordered_variances[upp_idx]) / 4;
+ 
+ #if DEBUG_VAR_BOOST
+     SVT_INFO("64x64 variance: %d\n", variances[ME_TIER_ZERO_PU_64x64]);
+-    SVT_INFO("8x8 min %d, 1st oct %d, median %d, max %d\n",
++    SVT_INFO("8x8 min %f, 1st oct %f, median %f, max %f\n",
+              ordered_variances[0],
+              ordered_variances[7],
+              ordered_variances[31],
+              ordered_variances[63]);
+     SVT_INFO("8x8 variances\n");
+-    uint16_t *variances_row = variances + ME_TIER_ZERO_PU_8x8_0;
++    double *variances_row = variances + ME_TIER_ZERO_PU_8x8_0;
+ 
+     for (int row = 0; row < 8; row++) {
+-        SVT_INFO("%5d %5d %5d %5d %5d %5d %5d %5d\n",
++        SVT_INFO("%5f %5f %5f %5f %5f %5f %5f %5f\n",
+                  variances_row[0],
+                  variances_row[1],
+                  variances_row[2],
+@@ -1730,10 +1739,17 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+     }
+ #endif
+ 
+-    // variance = 0 areas are either completely flat patches or very fine gradients
+-    // SVT-AV1 doesn't have enough resolution to tell them apart, so let's assume they're not flat and boost them
+-    if (variance == 0)
+-        variance = 1;
++    // clip minimum variance to 1 or 0.25 (PQ transfer)
++    if (curve == 3) {
++        if (variance < 0.25) {
++            variance = 0.25;
++        }
++    }
++    else {
++        if (variance < 1) {
++            variance = 1;
++        }
++    }
+ 
+     // compute a boost based on a fast-growing formula
+     // high and medium variance sbs essentially get no boost, while increasingly lower variance sbs get stronger boosts
+@@ -1743,16 +1759,33 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+ 
+     switch (curve) {
+     case 1: /* 1: low-medium contrast boosting curve */
+-        qstep_ratio = 0.25 * strength * (-log2((double)variance) + 8) + 1;
++        qstep_ratio = 0.25 * strength * (-log2(variance) + 8) + 1;
+         break;
+     case 2: /* 2: still picture curve, tuned for SSIMULACRA2 performance on CID22 */
+-        qstep_ratio = 0.15 * strength * (-log2((double)variance) + 10) + 1;
++        qstep_ratio = 0.15 * strength * (-log2(variance) + 10) + 1;
+         break;
+-    default: /* 0: default q step ratio curve */
+-        qstep_ratio = pow(1.018, strengths[strength] * (-10 * log2((double)variance) + 80));
++    default: /* 0, 3: default q step ratio curve */
++        qstep_ratio = pow(1.018, strengths[strength] * (-10 * log2(variance) + 80));
+         break;
+     }
+-    qstep_ratio = CLIP3(1, VAR_BOOST_MAX_QSTEP_RATIO_BOOST, qstep_ratio);
++
++    // PQ curve dark bias adjustment, reduce boost the darker the block
++    if (curve == 3 && mean <= 25000) {
++        // From 0.25 to 1.0
++        double dark_attenuation_ratio = 0.25 + 0.75 * ((mean * mean) / (25000.0 * 25000.0));
++        // Check if entire superblock is mixed variance, and don't apply adjustment otherwise
++        bool should_protect_block = variances[ME_TIER_ZERO_PU_64x64] > 256;
++
++        if (!should_protect_block) {
++            qstep_ratio = ((qstep_ratio - 1) * dark_attenuation_ratio + 1);
++        }
++    }
++
++    if (curve == 3) {
++        qstep_ratio = CLIP3(1, VAR_BOOST_MAX_PQ_QSTEP_RATIO_BOOST, qstep_ratio);
++    } else {
++        qstep_ratio = CLIP3(1, VAR_BOOST_MAX_QSTEP_RATIO_BOOST, qstep_ratio);
++    }
+ 
+     int32_t base_q   = svt_av1_convert_qindex_to_q_fp8(base_q_idx, bit_depth);
+     int32_t target_q = (int32_t)(base_q / qstep_ratio);
+@@ -1762,14 +1795,19 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+     case 2: /* still picture boost, tuned for SSIMULACRA2 performance on CID22 */
+         boost = (int32_t)((base_q_idx + 496) * -svt_av1_compute_qdelta_fp(base_q, target_q, bit_depth) / (255 + 1024));
+         break;
++    case 3: /* HDR-optimized perceptual curve scaling */
++        boost = (int32_t)((base_q_idx + 2000) * -svt_av1_compute_qdelta_fp(base_q, target_q, bit_depth) / (255 + 2000));
++        break;
+     default: /* curve 0 & 1 boost (default) */
+         boost = (int32_t)((base_q_idx + 40) * -svt_av1_compute_qdelta_fp(base_q, target_q, bit_depth) / (255 + 40));
+         break;
+     }
+-    boost = AOMMIN(VAR_BOOST_MAX_DELTAQ_RANGE, boost);
++
++    int32_t max_range = (curve == 3) ? VAR_BOOST_MAX_PQ_DELTAQ_RANGE : VAR_BOOST_MAX_DELTAQ_RANGE;
++    boost = AOMMIN(max_range, boost);
+ 
+ #if DEBUG_VAR_BOOST
+-    SVT_INFO("Variance: %d, Strength: %d, Q-step ratio: %f, Boost: %d, Base q: %d, Target q: %d\n",
++    SVT_INFO("Variance: %f, Strength: %d, Q-step ratio: %f, Boost: %d, Base q: %d, Target q: %d\n",
+              variance,
+              strength,
+              qstep_ratio,
+@@ -1797,6 +1835,8 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+ 
+     uint8_t min_qindex = MAX_Q_INDEX;
+     uint8_t max_qindex = MIN_Q_INDEX;
++    int32_t max_range = (scs->static_config.variance_boost_curve == 3) ?
++        VAR_BOOST_MAX_PQ_DELTAQ_RANGE : VAR_BOOST_MAX_DELTAQ_RANGE;
+ 
+ #if DEBUG_VAR_BOOST_STATS
+     printf("TPL/CQP SB qindex, frame %llu, temp. level %i\n", pcs->picture_number, pcs->temporal_layer_index);
+@@ -1818,6 +1858,7 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+ 
+         // adjust deltaq based on sb variance, with lower variance resulting in a lower qindex
+         boost = av1_get_deltaq_sb_variance_boost(ppcs_ptr->frm_hdr.quantization_params.base_q_idx,
++                                                 ppcs_ptr->mean[sb_addr],
+                                                  ppcs_ptr->variance[sb_addr],
+                                                  scs->static_config.variance_boost_strength,
+                                                  scs->static_config.encoder_bit_depth,
+@@ -1843,7 +1884,7 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+ 
+     // normalize and clamp frame qindex value to maximize deltaq range
+     int range                 = max_qindex - min_qindex;
+-    range                     = AOMMIN(range, VAR_BOOST_MAX_DELTAQ_RANGE);
++    range                     = AOMMIN(range, max_range);
+     int normalized_base_q_idx = (int)min_qindex + (range >> 1);
+ 
+ #if DEBUG_VAR_BOOST_QP
+@@ -1864,8 +1905,8 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+         sb_ptr = pcs->sb_ptr_array[sb_addr];
+ 
+         int offset = (int)sb_ptr->qindex - normalized_base_q_idx;
+-        offset     = AOMMIN(offset, VAR_BOOST_MAX_DELTAQ_RANGE >> 1);
+-        offset     = AOMMAX(offset, -VAR_BOOST_MAX_DELTAQ_RANGE >> 1);
++        offset     = AOMMIN(offset, max_range >> 1);
++        offset     = AOMMAX(offset, -max_range >> 1);
+ 
+         uint8_t normalized_qindex = CLIP3(1, // q_index 0 is lossless, and is currently not supported in SVT-AV1
+                                           MAX_Q_INDEX,
+@@ -3871,13 +3912,53 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                         chroma_qindex += scs->static_config.chroma_qindex_offsets[pcs->temporal_layer_index];
+                     }
+ 
++                    uint8_t chroma_qindex_adjustment = chroma_qindex;
++                    uint8_t tune2_chroma_qindex;
++
++                    switch (scs->static_config.tune) {
++                    case 2:
++                        // Chroma boost function - ramp down for higher qindices
++                        tune2_chroma_qindex = MAX(0, chroma_qindex_adjustment - 48);
++                        chroma_qindex -= CLIP3(0, 12, (int32_t)rint(pow(tune2_chroma_qindex, 1.4) / 9.0));
++                        break;
++                    case 4:
++                        // Constant chroma boost with gradual ramp-down for very high qindex levels
++                        chroma_qindex -= CLIP3(0, 12, (chroma_qindex_adjustment / 2) - 14);
++                        break;
++                }
++
++                // Tune-independent chroma boosts
++                // Boost chroma in general (4:2:0) with ramp down
++                   chroma_qindex -= CLIP3(0, 8, chroma_qindex_adjustment / 2);
++
++                // Boost chroma on PQ transfer with ramp down
++                if (scs->static_config.transfer_characteristics == EB_CICP_TC_SMPTE_2084) {
++                    chroma_qindex -= CLIP3(0, 4, (chroma_qindex_adjustment / 6) - 8);
++                }
++
++                 // Boost chroma on wide color (P3) primary with ramp down
++                if (scs->static_config.color_primaries == EB_CICP_CP_SMPTE_431 ||
++                    scs->static_config.color_primaries == EB_CICP_CP_SMPTE_432) {
++                    chroma_qindex -= CLIP3(0, 4, (chroma_qindex_adjustment / 6) - 8);
++                 }
++
++                // Boost chroma on wide color (BT.2020) primary with ramp down
++                if (scs->static_config.color_primaries == EB_CICP_CP_BT_2020) {
++                    chroma_qindex -= CLIP3(0, 8, (chroma_qindex_adjustment / 6) - 8);
++                 }
++
+                     chroma_qindex = CLIP3(quantizer_to_qindex[scs->static_config.min_qp_allowed],
+                                           quantizer_to_qindex[scs->static_config.max_qp_allowed],
+                                           chroma_qindex);
+ 
+-                    frm_hdr->quantization_params.delta_q_dc[1]     = frm_hdr->quantization_params.delta_q_dc[2] =
+-                        frm_hdr->quantization_params.delta_q_ac[1] = frm_hdr->quantization_params.delta_q_ac[2] =
+-                            chroma_qindex - frm_hdr->quantization_params.base_q_idx;
++                     // Calculate chroma delta q for Cb, and clip it to a valid range
++                    frm_hdr->quantization_params.delta_q_dc[1] = frm_hdr->quantization_params.delta_q_ac[1] =
++                    CLIP3(-64, 63, chroma_qindex - frm_hdr->quantization_params.base_q_idx + 12);
++
++                    // Calculate chroma delta q for Cr, and clip it to a valid range
++                    frm_hdr->quantization_params.delta_q_dc[2] = frm_hdr->quantization_params.delta_q_ac[2] =
++                    CLIP3(-64, 63, chroma_qindex - frm_hdr->quantization_params.base_q_idx);
++
+                     if (scs->enable_qp_scaling_flag && pcs->ppcs->qp_on_the_fly == false) {
+                         // max bit rate is only active for 1 pass CRF
+                         if (scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF &&
+diff --git a/Source/Lib/Codec/segmentation.c b/Source/Lib/Codec/segmentation.c
+index 9462571b..d5e1bb34 100644
+--- a/Source/Lib/Codec/segmentation.c
++++ b/Source/Lib/Codec/segmentation.c
+@@ -20,7 +20,7 @@
+ #endif
+ #include "deblocking_filter.h"
+ 
+-static uint16_t get_variance_for_cu(const BlockGeom *blk_geom, uint16_t *variance_ptr) {
++static double get_variance_for_cu(const BlockGeom *blk_geom, double *variance_ptr) {
+     int index0, index1;
+     //Assumes max CU size is 64
+     switch (blk_geom->bsize) {
+@@ -76,7 +76,7 @@ static uint16_t get_variance_for_cu(const BlockGeom *blk_geom, uint16_t *varianc
+     case BLOCK_64X16:
+     default: index0 = index1 = 0; break;
+     }
+-    return (variance_ptr[index0] + variance_ptr[index1]) >> 1;
++    return (variance_ptr[index0] + variance_ptr[index1]) / 2;
+ }
+ 
+ static void roi_map_apply_segmentation_based_quantization(const BlockGeom *blk_geom, PictureControlSet *pcs,
+@@ -127,7 +127,7 @@ void svt_aom_apply_segmentation_based_quantization(const BlockGeom *blk_geom, Pi
+         roi_map_apply_segmentation_based_quantization(blk_geom, pcs, sb_ptr, blk_ptr);
+         return;
+     }
+-    uint16_t           *variance_ptr        = pcs->ppcs->variance[sb_ptr->index];
++    double             *variance_ptr        = pcs->ppcs->variance[sb_ptr->index];
+     SegmentationParams *segmentation_params = &pcs->ppcs->frm_hdr.segmentation_params;
+     uint16_t            variance            = get_variance_for_cu(blk_geom, variance_ptr);
+     blk_ptr->segment_id                     = 0;
+@@ -253,7 +253,7 @@ void find_segment_qps(SegmentationParams *segmentation_params,
+ 
+     // get range of variance
+     for (uint32_t sb_idx = 0; sb_idx < pcs->b64_total_count; ++sb_idx) {
+-        uint16_t *variance_ptr = pcs->ppcs->variance[sb_idx];
++        double   *variance_ptr = pcs->ppcs->variance[sb_idx];
+         uint32_t  var_index, local_avg = 0;
+         // Loop over all 8x8s in a 64x64
+         for (var_index = ME_TIER_ZERO_PU_8x8_0; var_index <= ME_TIER_ZERO_PU_8x8_63; var_index++) {
+diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
+index 4e90a1c5..03c85ba1 100644
+--- a/Source/Lib/Globals/enc_handle.c
++++ b/Source/Lib/Globals/enc_handle.c
+@@ -5739,6 +5739,12 @@ static void copy_api_from_app(
+     // Sharpness
+     scs->static_config.sharpness = config_struct->sharpness;
+ 
++    // Override Variance Boost curve for PQ transfer
++    if (scs->static_config.transfer_characteristics == EB_CICP_TC_SMPTE_2084) {
++        SVT_INFO("HDR content with PQ transfer detected, switching to PQ-optimized curve\n");
++        scs->static_config.variance_boost_curve = 3;
++    }
++
+     return;
+ }
+ 
+diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
+index 91ebc5fd..1048721e 100644
+--- a/Source/Lib/Globals/enc_settings.c
++++ b/Source/Lib/Globals/enc_settings.c
+@@ -911,8 +911,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
+         return_error = EB_ErrorBadParameter;
+     }
+ 
+-    if (config->variance_boost_curve > 2) {
+-        SVT_ERROR("Instance %u: Variance Boost curve must be between 0 and 2\n", channel_number + 1);
++    if (config->variance_boost_curve > 3) {
++        SVT_ERROR("Instance %u: Variance Boost curve must be between 0 and 3\n", channel_number + 1);
+         return_error = EB_ErrorBadParameter;
+     }
+ 
+-- 
+2.50.1
+
