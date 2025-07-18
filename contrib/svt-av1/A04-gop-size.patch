@@ -1,0 +1,54 @@
+From a34a55a38daf57f8c15961893577472afde27b12 Mon Sep 17 00:00:00 2001
+From: Nomis101 <Nomis101@web.de>
+Date: Sat, 19 Jul 2025 00:55:10 +0200
+Subject: gop size
+
+Signed-off-by: Nomis101 <Nomis101@web.de>
+---
+ Docs/Parameters.md              | 2 +-
+ Source/App/app_config.c         | 4 ++--
+ Source/Lib/Globals/enc_handle.c | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/Docs/Parameters.md b/Docs/Parameters.md
+index d8e1e1de..ef65f5eb 100644
+--- a/Docs/Parameters.md
++++ b/Docs/Parameters.md
+@@ -250,7 +250,7 @@ SvtAv1EncApp -i in.y4m -b out.ivf --roi-map-file roi_map.txt
+ 
+ | **Configuration file parameter** | **Command line**      | **Range**       | **Default**       | **Description**                                                                                                                                              |
+ |----------------------------------|-----------------------|-----------------|-------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+-| **Keyint**                       | --keyint              | [-2-`(2^31)-1`] | -2                | GOP size (frames), use `s` suffix for seconds (SvtAv1EncApp only) [-2: ~5 seconds, -1: "infinite" only for CRF, 0: == -1]                                    |
++| **Keyint**                       | --keyint              | [-2-`(2^31)-1`] | -2                | GOP size (frames), use `s` suffix for seconds (SvtAv1EncApp only) [-2: ~10 seconds, -1: "infinite" only for CRF, 0: == -1]                                    |
+ | **IntraRefreshType**             | --irefresh-type       | [1-2]           | 2                 | Intra refresh type [1: FWD Frame (Open GOP), 2: KEY Frame (Closed GOP)]                                                                                      |
+ | **SceneChangeDetection**         | --scd                 | [0-1]           | 0                 | Scene change detection control                                                                                                                               |
+ | **Lookahead**                    | --lookahead           | [-1,0-120]      | -1                | Number of frames in the future to look ahead, beyond minigop, temporal filtering, and rate control [-1: auto]                                                |
+diff --git a/Source/App/app_config.c b/Source/App/app_config.c
+index 7edcd7ec..9c06c83d 100644
+--- a/Source/App/app_config.c
++++ b/Source/App/app_config.c
+@@ -815,7 +815,7 @@ ConfigDescription config_entry_2p[] = {
+ 
+ ConfigDescription config_entry_intra_refresh[] = {
+     {KEYINT_TOKEN,
+-     "GOP size (frames), default is -2 [-2: ~5 seconds, -1: \"infinite\" and only applicable for "
++     "GOP size (frames), default is -2 [-2: ~10 seconds, -1: \"infinite\" and only applicable for "
+      "CRF, 0: same as -1]"},
+     {INTRA_REFRESH_TYPE_TOKEN, "Intra refresh type, default is 2 [1: FWD Frame (Open GOP), 2: KEY Frame (Closed GOP)]"},
+     {SCENE_CHANGE_DETECTION_TOKEN, "Scene change detection control, default is 0 [0-1]"},
+diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
+index 1085a2cb..2cf13061 100644
+--- a/Source/Lib/Globals/enc_handle.c
++++ b/Source/Lib/Globals/enc_handle.c
+@@ -2746,7 +2746,7 @@ static int32_t compute_default_intra_period(
+     int32_t mini_gop_size              = (1 << (config->hierarchical_levels));
+ 
+     intra_period                       = ((int)((fps + mini_gop_size) / mini_gop_size)*(mini_gop_size));
+-    intra_period                       = intra_period * 5; // use a 5-sec gop by default.
++    intra_period                       = intra_period * 10; // use a 10-sec gop by default.
+     if (config->intra_refresh_type == 1)
+         intra_period -= 1;
+ 
+-- 
+2.50.1
+
