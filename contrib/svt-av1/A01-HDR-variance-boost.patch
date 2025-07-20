@@ -1,16 +1,15 @@
-From 6ee8ea0a478ecd5aede9b13124fbdbb887b81e73 Mon Sep 17 00:00:00 2001
+From 0b437237624f76dfeb222aeead570e48dcd0a640 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Mon, 21 Jul 2025 00:51:25 +0200
+Date: Tue, 15 Jul 2025 20:35:39 +0200
 Subject: HDR-variance-boost
 
-Port from svt-av1-hdr of
+Port of
 https://github.com/juliobbv-p/svt-av1-hdr/commit/02af1a85cfd8b326d2468891b5acde1c78064b25
 https://github.com/juliobbv-p/svt-av1-hdr/commit/bfd2f82468e073d98536a0a6aa914f38beec9745
 https://github.com/juliobbv-p/svt-av1-hdr/commit/de6fe9b08a16ee83327bf73b0275a4e75c111bdc
 https://github.com/juliobbv-p/svt-av1-hdr/commit/0adc02507c54daace40f7c5cc1011cbc657333c2
 https://github.com/juliobbv-p/svt-av1-hdr/commit/a57642b1a740f79a4b4c906da3c9aa1abb3551b5
 https://github.com/juliobbv-p/svt-av1-hdr/commit/13d5e6023cb99fb25e987bb3124a529dbf9fa72c
-https://github.com/juliobbv-p/svt-av1-hdr/commit/a379f6fdc00d276f6358a7ebbd57b7b8f85aa250
 
 Signed-off-by: Nomis101 <Nomis101@web.de>
 ---
@@ -21,17 +20,17 @@ Signed-off-by: Nomis101 <Nomis101@web.de>
  Source/Lib/Codec/pcs.c                  |   4 +
  Source/Lib/Codec/pcs.h                  |   3 +-
  Source/Lib/Codec/pic_analysis_process.c | 288 +++---------------------
- Source/Lib/Codec/rc_process.c           | 155 ++++++++++---
+ Source/Lib/Codec/rc_process.c           | 145 +++++++++---
  Source/Lib/Codec/segmentation.c         |   8 +-
  Source/Lib/Globals/enc_handle.c         |   6 +
  Source/Lib/Globals/enc_settings.c       |   4 +-
- 11 files changed, 171 insertions(+), 314 deletions(-)
+ 11 files changed, 165 insertions(+), 310 deletions(-)
 
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index 809dfe95..1efc8604 100644
+index 84fdc455..55f410a2 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
-@@ -968,7 +968,8 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -967,7 +967,8 @@ typedef struct EbSvtAv1EncConfiguration {
       *  0: default curve
       *  1: low-medium contrast boost curve
       *  2: still picture curve, tuned for SSIMULACRA2 performance on the CID22 Validation Set
@@ -42,10 +41,10 @@ index 809dfe95..1efc8604 100644
  
      /* @brief Frame-level luminance-based QP bias to improve quality in low luma scenarios
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index 7edcd7ec..c2f3cede 100644
+index f208e07b..a7b7aebe 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
-@@ -946,7 +946,7 @@ ConfigDescription config_entry_variance_boost[] = {
+@@ -942,7 +942,7 @@ ConfigDescription config_entry_variance_boost[] = {
      {ENABLE_VARIANCE_BOOST_TOKEN, "Enable variance boost, default is 0 [0-1]"},
      {VARIANCE_BOOST_STRENGTH_TOKEN, "Variance boost strength, default is 2 [1-4]"},
      {VARIANCE_OCTILE_TOKEN, "Octile for variance boost, default is 6 [1-8]"},
@@ -118,7 +117,7 @@ index b79a16f3..2036e2f2 100644
      }
      if (init_data_ptr->calc_hist) {
 diff --git a/Source/Lib/Codec/pcs.h b/Source/Lib/Codec/pcs.h
-index 8c1fad8b..03c8b3f3 100644
+index 1fc5b0cf..26cf5d72 100644
 --- a/Source/Lib/Codec/pcs.h
 +++ b/Source/Lib/Codec/pcs.h
 @@ -937,7 +937,8 @@ typedef struct PictureParentControlSet {
@@ -444,7 +443,7 @@ index f8655632..c291dd0a 100644
      return return_error;
  }
 diff --git a/Source/Lib/Codec/rc_process.c b/Source/Lib/Codec/rc_process.c
-index e3a75c7c..52bcf045 100644
+index e3a75c7c..4378096d 100644
 --- a/Source/Lib/Codec/rc_process.c
 +++ b/Source/Lib/Codec/rc_process.c
 @@ -1665,8 +1665,15 @@ static void generate_b64_me_qindex_map(PictureControlSet *pcs) {
@@ -646,47 +645,7 @@ index e3a75c7c..52bcf045 100644
  
          uint8_t normalized_qindex = CLIP3(1, // q_index 0 is lossless, and is currently not supported in SVT-AV1
                                            MAX_Q_INDEX,
-@@ -3792,6 +3833,9 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
-                                          (int8_t)scs->static_config.max_qp_allowed,
-                                          (int8_t)scs->static_config.qp + scs->static_config.startup_qp_offset)
-                         : (uint8_t)scs->static_config.qp;
-+                    const int scs_qindex = CLIP3(MIN_Q_INDEX,
-+                                                 MAX_Q_INDEX,
-+                                                 quantizer_to_qindex[scs_qp] + scs->static_config.extended_crf_qindex_offset);
-                     // if RC mode is 0,  fixed QP is used
-                     // QP scaling based on POC number for Flat IPPP structure
-                     // make sure no run to run is cause
-@@ -3806,18 +3850,17 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
- 
-                     } else {
-                         if (scs->enable_qp_scaling_flag) {
--                            const int32_t qindex = quantizer_to_qindex[scs_qp];
-                             // if there are need enough pictures in the LAD/SlidingWindow, the adaptive QP scaling is not used
-                             int32_t new_qindex;
-                             // if CRF
-                             if (pcs->ppcs->tpl_ctrls.enable) {
-                                 if (pcs->picture_number == 0) {
--                                    rc->active_worst_quality = quantizer_to_qindex[scs_qp];
-+                                    rc->active_worst_quality = scs_qindex;
-                                     av1_rc_init(scs);
-                                 }
-                                 new_qindex = crf_qindex_calc(pcs, rc, rc->active_worst_quality);
-                             } else // if CQP
--                                new_qindex = cqp_qindex_calc(pcs, qindex);
-+                                new_qindex = cqp_qindex_calc(pcs, scs_qindex);
-                             frm_hdr->quantization_params.base_q_idx = (uint8_t)CLIP3(
-                                 (int32_t)quantizer_to_qindex[scs->static_config.min_qp_allowed],
-                                 (int32_t)quantizer_to_qindex[scs->static_config.max_qp_allowed],
-@@ -3826,7 +3869,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
- 
-                         if (scs->static_config.use_fixed_qindex_offsets) {
-                             int32_t qindex = scs->static_config.use_fixed_qindex_offsets == 1
--                                ? quantizer_to_qindex[scs_qp]
-+                                ? scs_qindex
-                                 : frm_hdr->quantization_params
-                                       .base_q_idx; // do not shut the auto QPS if use_fixed_qindex_offsets 2
- 
-@@ -3871,13 +3914,53 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3871,13 +3912,53 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
                          chroma_qindex += scs->static_config.chroma_qindex_offsets[pcs->temporal_layer_index];
                      }
  
@@ -784,10 +743,10 @@ index 9462571b..d5e1bb34 100644
          // Loop over all 8x8s in a 64x64
          for (var_index = ME_TIER_ZERO_PU_8x8_0; var_index <= ME_TIER_ZERO_PU_8x8_63; var_index++) {
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index 1085a2cb..4c352eda 100644
+index 4e90a1c5..03c85ba1 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -5746,6 +5746,12 @@ static void copy_api_from_app(
+@@ -5739,6 +5739,12 @@ static void copy_api_from_app(
      // Sharpness
      scs->static_config.sharpness = config_struct->sharpness;
  
@@ -801,10 +760,10 @@ index 1085a2cb..4c352eda 100644
  }
  
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index 991a21a7..7b40b0d7 100644
+index 91ebc5fd..1048721e 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
-@@ -916,8 +916,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
+@@ -911,8 +911,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
          return_error = EB_ErrorBadParameter;
      }
  
