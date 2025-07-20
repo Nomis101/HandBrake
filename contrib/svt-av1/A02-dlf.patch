@@ -3,6 +3,11 @@ From: Nomis101 <Nomis101@web.de>
 Date: Tue, 15 Jul 2025 20:37:35 +0200
 Subject: dlf
 
+Port of
+https://github.com/psy-ex/svt-av1-psy/commit/ef156b902c297709a52eb5e25fb88a2a47e6e45f
+https://github.com/psy-ex/svt-av1-psy/commit/7bf73564ce1a0c701d27774c6efee38a3601df1e
+https://github.com/psy-ex/svt-av1-psy/commit/7e38102d609a41253708e99ccbc664cd83007ad4
+
 Signed-off-by: Nomis101 <Nomis101@web.de>
 ---
  Docs/Parameters.md                 |  2 +-

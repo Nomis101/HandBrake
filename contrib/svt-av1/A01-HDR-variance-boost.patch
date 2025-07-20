@@ -3,6 +3,14 @@ From: Nomis101 <Nomis101@web.de>
 Date: Tue, 15 Jul 2025 20:35:39 +0200
 Subject: HDR-variance-boost
 
+Port of
+https://github.com/juliobbv-p/svt-av1-hdr/commit/02af1a85cfd8b326d2468891b5acde1c78064b25
+https://github.com/juliobbv-p/svt-av1-hdr/commit/bfd2f82468e073d98536a0a6aa914f38beec9745
+https://github.com/juliobbv-p/svt-av1-hdr/commit/de6fe9b08a16ee83327bf73b0275a4e75c111bdc
+https://github.com/juliobbv-p/svt-av1-hdr/commit/0adc02507c54daace40f7c5cc1011cbc657333c2
+https://github.com/juliobbv-p/svt-av1-hdr/commit/a57642b1a740f79a4b4c906da3c9aa1abb3551b5
+https://github.com/juliobbv-p/svt-av1-hdr/commit/13d5e6023cb99fb25e987bb3124a529dbf9fa72c
+
 Signed-off-by: Nomis101 <Nomis101@web.de>
 ---
  Source/API/EbSvtAv1Enc.h                |   3 +-

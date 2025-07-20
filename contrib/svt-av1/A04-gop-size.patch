@@ -3,6 +3,9 @@ From: Nomis101 <Nomis101@web.de>
 Date: Sat, 19 Jul 2025 00:55:10 +0200
 Subject: gop size
 
+Port of
+https://github.com/psy-ex/svt-av1-psy/commit/6f2fed1c0fe8defd2073de856da77a7c1a71faa5
+
 Signed-off-by: Nomis101 <Nomis101@web.de>
 ---
  Docs/Parameters.md              | 2 +-
