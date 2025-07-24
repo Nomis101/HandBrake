@@ -1,6 +1,6 @@
-From 3a060d0bda94f28b16aeb1b37b4edca8cfb8c673 Mon Sep 17 00:00:00 2001
+From 58d9a024ca0cce9f7d4c0ee894910ba6b5064e06 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Sun, 20 Jul 2025 09:22:07 +0200
+Date: Thu, 24 Jul 2025 23:42:11 +0200
 Subject: noise norm
 
 Port of
@@ -12,37 +12,36 @@ https://github.com/psy-ex/svt-av1-psy/commit/71e62a99b2484a48307da39950f91f0f91a
 
 Signed-off-by: Nomis101 <Nomis101@web.de>
 ---
- Docs/Parameters.md                |   3 +-
- Source/API/EbSvtAv1Enc.h          |  22 +++--
+ Docs/Parameters.md                |   2 +
+ Source/API/EbSvtAv1Enc.h          |  11 ++-
  Source/App/app_config.c           |   8 ++
- Source/Lib/Codec/full_loop.c      | 129 ++++++++++++++++++++++++++++++
+ Source/Lib/Codec/full_loop.c      | 127 ++++++++++++++++++++++++++++++
  Source/Lib/Codec/pcs.h            |   1 +
  Source/Lib/Globals/enc_handle.c   |   4 +-
  Source/Lib/Globals/enc_settings.c |  12 +++
- 7 files changed, 170 insertions(+), 9 deletions(-)
+ 7 files changed, 163 insertions(+), 2 deletions(-)
 
 diff --git a/Docs/Parameters.md b/Docs/Parameters.md
-index 722e30ca..99f77529 100644
+index 1882976b..e879cc6c 100644
 --- a/Docs/Parameters.md
 +++ b/Docs/Parameters.md
-@@ -129,7 +129,8 @@ For more information on valid values for specific keys, refer to the [EbEncSetti
+@@ -130,6 +130,8 @@ For more information on valid values for specific keys, refer to the [EbEncSetti
  | **TemporalFilteringStrength**    | --tf-strength                    | [0-4]      | 3           | Manually adjust temporal filtering strength. Higher values = stronger temporal filtering                                                             |
  | **LuminanceQpBias**              | --luminance-qp-bias              | [0-100]    | 0           | Adjusts a frame's QP based on its average luma value                                                                                                 |
  | **Sharpness**                    | --sharpness                      | [-7-7]     | 0           | Bias towards decreased/increased sharpness                                                                                                           |
--
 +| **NoiseNormStrength**            |  --noise-norm-strength           | [0-4]      | 0           | Selectively boost AC coefficients to improve fine detail retention in certain circumstances                  
 +|
  
- ### **UseFixedQIndexOffsets** and more information
  
+ ### **UseFixedQIndexOffsets** and more information
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index 4225e981..911e7f02 100644
+index eec1c028..e828201c 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
-@@ -1028,9 +1027,18 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -965,9 +965,18 @@ typedef struct EbSvtAv1EncConfiguration {
+      * Default is false.
       */
-     uint8_t qp_scale_compress_strength;
- 
+     bool rtc;
 +
 +    /* @brief Noise normalization strength; modifies the encoder's willingness
 +     * to boost AC coefficients in low-noise blocks.
@@ -56,11 +55,11 @@ index 4225e981..911e7f02 100644
      /*Add 128 Byte Padding to Struct to avoid changing the size of the public configuration struct*/
 -    uint8_t padding[128 - (sizeof(uint8_t) * 3)
 +    uint8_t padding[128 - (sizeof(uint8_t) * 4)
- #if FTR_RTC_MODE
          - sizeof(bool)
- #endif
+     ];
+     // clang-format on
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index a363f4a6..7cc12479 100644
+index d206b4db..c55d2ff4 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
 @@ -187,6 +187,8 @@
@@ -72,7 +71,7 @@ index a363f4a6..7cc12479 100644
  #define STARTUP_MG_SIZE_TOKEN "--startup-mg-size"
  #define STARTUP_QP_OFFSET_TOKEN "--startup-qp-offset"
  #define ROI_MAP_FILE_TOKEN "--roi-map-file"
-@@ -799,6 +801,8 @@ ConfigDescription config_entry_rc[] = {
+@@ -797,6 +799,8 @@ ConfigDescription config_entry_rc[] = {
      {LUMINANCE_QP_BIAS_TOKEN, "Adjusts a frame's QP based on its average luma value, default is 0 [0-100]"},
      // Sharpness
      {SHARPNESS_TOKEN, "Bias towards decreased/increased sharpness, default is 0 [-7 to 7]"},
@@ -81,22 +80,22 @@ index a363f4a6..7cc12479 100644
      // Termination
      {NULL, NULL}};
  
-@@ -1151,6 +1155,10 @@ ConfigEntry config_entry[] = {
- #endif
-     // QP scale compression
-     {QP_SCALE_COMPRESS_STRENGTH_TOKEN, "QpScaleCompressStrength", set_cfg_generic_token},
-+    
+@@ -946,6 +950,10 @@ ConfigDescription config_entry_variance_boost[] = {
+     {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-3]"},
+     // QP scale compress
+     {QP_SCALE_COMPRESS_STRENGTH_TOKEN, "QP scale compress strength, default is 1 [0-3]"},
++
 +    // Noise normalization strength
 +    {NOISE_NORM_STRENGTH_TOKEN, "NoiseNormStrength", set_cfg_generic_token},
 +
      // Termination
-     {NULL, NULL, NULL}};
+     {NULL, NULL}};
  
 diff --git a/Source/Lib/Codec/full_loop.c b/Source/Lib/Codec/full_loop.c
-index adb2ad80..d804a49a 100644
+index 71af54b1..e764372f 100644
 --- a/Source/Lib/Codec/full_loop.c
 +++ b/Source/Lib/Codec/full_loop.c
-@@ -1472,6 +1473,133 @@ uint8_t svt_av1_compute_cul_level_c(const int16_t *const scan, const int32_t *co
+@@ -1464,6 +1464,133 @@ uint8_t svt_av1_compute_cul_level_c(const int16_t *const scan, const int32_t *co
      return (uint8_t)cul_level;
  }
  
@@ -231,30 +230,30 @@ index adb2ad80..d804a49a 100644
                                        int32_t *quant_coeff, int32_t *recon_coeff, uint32_t qindex,
                                        int32_t segmentation_qp_offset, TxSize txsize, uint16_t *eob,
 diff --git a/Source/Lib/Codec/pcs.h b/Source/Lib/Codec/pcs.h
-index 17514395..491127cd 100644
+index e305f994..3c42f13d 100644
 --- a/Source/Lib/Codec/pcs.h
 +++ b/Source/Lib/Codec/pcs.h
-@@ -1376,6 +1376,7 @@ typedef struct PictureControlSetInitData {
- #if OPT_ALLINTRA_STILLIMAGE_2
-     bool allintra;
- #endif
+@@ -1192,6 +1192,7 @@ typedef struct PictureControlSetInitData {
+     uint8_t tf_strength;
+     uint8_t qp_scale_compress_strength;
+     bool    allintra;
 +    uint8_t noise_norm_strength;
  } PictureControlSetInitData;
  
- #if !CLN_FUNCS_HEADER
+ /**************************************
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index 11696d8d..79ec2b34 100644
+index 207af1cf..38a12eff 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -1739,6 +1739,7 @@ EB_API EbErrorType svt_av1_enc_init(EbComponentType *svt_enc_component)
+@@ -1526,6 +1526,7 @@ EB_API EbErrorType svt_av1_enc_init(EbComponentType *svt_enc_component)
          input_data.variance_octile = enc_handle_ptr->scs_instance_array[instance_index]->scs->static_config.variance_octile;
          input_data.tf_strength = enc_handle_ptr->scs_instance_array[instance_index]->scs->static_config.tf_strength;
          input_data.qp_scale_compress_strength = enc_handle_ptr->scs_instance_array[instance_index]->scs->static_config.qp_scale_compress_strength;
 +        input_data.noise_norm_strength = enc_handle_ptr->scs_instance_array[instance_index]->scs->static_config.noise_norm_strength;
          input_data.static_config = enc_handle_ptr->scs_instance_array[instance_index]->scs->static_config;
- #if OPT_ALLINTRA_STILLIMAGE_2
          input_data.allintra = enc_handle_ptr->scs_instance_array[instance_index]->scs->allintra;
-@@ -5258,7 +5259,8 @@ static void copy_api_from_app(
+         EB_NEW(
+@@ -4236,7 +4237,8 @@ static void copy_api_from_app(
      scs->max_input_luma_height = config_struct->source_height;
      // SB Definitions
      scs->static_config.pred_structure = ((EbSvtAv1EncConfiguration*)config_struct)->pred_structure;
@@ -262,13 +261,13 @@ index 11696d8d..79ec2b34 100644
 +    // Noise normalization strength
 +    scs->static_config.noise_norm_strength = config_struct->noise_norm_strength;
      scs->static_config.avif = ((EbSvtAv1EncConfiguration*)config_struct)->avif;
- #if FTR_RTC_MODE
      scs->static_config.rtc = ((EbSvtAv1EncConfiguration*)config_struct)->rtc;
+     if (scs->static_config.rtc && scs->static_config.pred_structure != LOW_DELAY) {
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index b309ecac..91b23e1d 100644
+index a7e56e57..4d2337a3 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
-@@ -942,6 +942,11 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
+@@ -884,6 +884,11 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
          return_error = EB_ErrorBadParameter;
      }
  
@@ -280,7 +279,7 @@ index b309ecac..91b23e1d 100644
      return return_error;
  }
  
-@@ -1109,6 +1114,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
+@@ -1037,6 +1042,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
      config_ptr->lossless                          = false;
      config_ptr->avif                              = false;
      config_ptr->qp_scale_compress_strength        = 1;
@@ -288,19 +287,19 @@ index b309ecac..91b23e1d 100644
      return return_error;
  }
  
-@@ -1255,6 +1261,11 @@ void svt_av1_print_lib_params(SequenceControlSet *scs) {
+@@ -1169,6 +1175,11 @@ void svt_av1_print_lib_params(SequenceControlSet *scs) {
  
          SVT_INFO("SVT [config]: QP scale compress strength \t\t\t: %d\n",
                   config->qp_scale_compress_strength);
-+        
++
 +        if (config->noise_norm_strength >= 0) {
 +            SVT_INFO("SVT [config]: Noise Normalization Strength \t: %d\n",
 +                config->noise_norm_strength);
 +        }
      }
- #if CLN_SEG_COUNTS
  #if DEBUG_BUFFERS
-@@ -2144,6 +2155,7 @@ EB_API EbErrorType svt_av1_enc_parse_parameter(EbSvtAv1EncConfiguration *config_
+     SVT_INFO("SVT [config]: INPUT / OUTPUT \t\t\t\t\t\t\t: %d / %d\n",
+@@ -2012,6 +2023,7 @@ EB_API EbErrorType svt_av1_enc_parse_parameter(EbSvtAv1EncConfiguration *config_
          {"luminance-qp-bias", &config_struct->luminance_qp_bias},
          {"enable-tf", &config_struct->enable_tf},
          {"tf-strength", &config_struct->tf_strength},

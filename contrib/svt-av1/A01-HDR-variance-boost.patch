@@ -1,6 +1,6 @@
-From 6ee8ea0a478ecd5aede9b13124fbdbb887b81e73 Mon Sep 17 00:00:00 2001
+From 9ca46ebc8e2efef6f75eea92dd16ab6ee29276c0 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Mon, 21 Jul 2025 00:51:25 +0200
+Date: Thu, 24 Jul 2025 22:46:31 +0200
 Subject: HDR-variance-boost
 
 Port from svt-av1-hdr of
@@ -28,10 +28,10 @@ Signed-off-by: Nomis101 <Nomis101@web.de>
  11 files changed, 171 insertions(+), 314 deletions(-)
 
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index 809dfe95..1efc8604 100644
+index 1115cbcc..54426573 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
-@@ -968,7 +968,8 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -908,7 +908,8 @@ typedef struct EbSvtAv1EncConfiguration {
       *  0: default curve
       *  1: low-medium contrast boost curve
       *  2: still picture curve, tuned for SSIMULACRA2 performance on the CID22 Validation Set
@@ -42,10 +42,10 @@ index 809dfe95..1efc8604 100644
  
      /* @brief Frame-level luminance-based QP bias to improve quality in low luma scenarios
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index 7edcd7ec..c2f3cede 100644
+index 37064cee..9c4ea61b 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
-@@ -946,7 +946,7 @@ ConfigDescription config_entry_variance_boost[] = {
+@@ -942,7 +942,7 @@ ConfigDescription config_entry_variance_boost[] = {
      {ENABLE_VARIANCE_BOOST_TOKEN, "Enable variance boost, default is 0 [0-1]"},
      {VARIANCE_BOOST_STRENGTH_TOKEN, "Variance boost strength, default is 2 [1-4]"},
      {VARIANCE_OCTILE_TOKEN, "Octile for variance boost, default is 6 [1-8]"},
@@ -55,10 +55,10 @@ index 7edcd7ec..c2f3cede 100644
      {NULL, NULL}};
  
 diff --git a/Source/Lib/Codec/entropy_coding.c b/Source/Lib/Codec/entropy_coding.c
-index c3aa3cae..468d04c8 100644
+index 77b69f52..9d79e665 100644
 --- a/Source/Lib/Codec/entropy_coding.c
 +++ b/Source/Lib/Codec/entropy_coding.c
-@@ -2579,9 +2579,7 @@ static void encode_quantization(const PictureParentControlSet *const pcs, struct
+@@ -2342,9 +2342,7 @@ static void encode_quantization(const PictureParentControlSet *const pcs, struct
      const FrameHeader *frm_hdr = &pcs->frm_hdr;
      svt_aom_wb_write_literal(wb, frm_hdr->quantization_params.base_q_idx, QINDEX_BITS);
      write_delta_q(wb, frm_hdr->quantization_params.delta_q_dc[AOM_PLANE_Y]);
@@ -69,7 +69,7 @@ index c3aa3cae..468d04c8 100644
  
      if (diff_uv_delta)
          svt_aom_wb_write_bit(wb, diff_uv_delta);
-@@ -2935,10 +2933,7 @@ static AOM_INLINE void write_color_config(const SequenceControlSet *const scs, s
+@@ -2698,10 +2696,7 @@ static AOM_INLINE void write_color_config(const SequenceControlSet *const scs, s
              svt_aom_wb_write_literal(wb, scs->static_config.chroma_sample_position, 2);
          }
      }
@@ -82,10 +82,10 @@ index c3aa3cae..468d04c8 100644
  }
  
 diff --git a/Source/Lib/Codec/full_loop.c b/Source/Lib/Codec/full_loop.c
-index 4d0daa6b..adb2ad80 100644
+index f17059e1..71af54b1 100644
 --- a/Source/Lib/Codec/full_loop.c
 +++ b/Source/Lib/Codec/full_loop.c
-@@ -1480,7 +1480,8 @@ uint8_t svt_aom_quantize_inv_quantize(PictureControlSet *pcs, ModeDecisionContex
+@@ -1472,7 +1472,8 @@ uint8_t svt_aom_quantize_inv_quantize(PictureControlSet *pcs, ModeDecisionContex
                                        uint32_t lambda, bool is_encode_pass) {
      SequenceControlSet *scs     = pcs->scs;
      EncodeContext      *enc_ctx = scs->enc_ctx;
@@ -96,10 +96,10 @@ index 4d0daa6b..adb2ad80 100644
      int32_t qmatrix_level = (IS_2D_TRANSFORM(tx_type) && pcs->ppcs->frm_hdr.quantization_params.using_qmatrix)
          ? pcs->ppcs->frm_hdr.quantization_params.qm[plane]
 diff --git a/Source/Lib/Codec/pcs.c b/Source/Lib/Codec/pcs.c
-index b79a16f3..2036e2f2 100644
+index e26e8102..9c0fdf96 100644
 --- a/Source/Lib/Codec/pcs.c
 +++ b/Source/Lib/Codec/pcs.c
-@@ -1237,6 +1237,9 @@ static void picture_parent_control_set_dctor(EbPtr ptr) {
+@@ -1140,6 +1140,9 @@ static void picture_parent_control_set_dctor(EbPtr ptr) {
      if (obj->is_chroma_downsampled_picture_ptr_owner)
          EB_DELETE(obj->chroma_downsampled_pic);
  
@@ -109,7 +109,7 @@ index b79a16f3..2036e2f2 100644
      if (obj->variance)
          EB_FREE_2D(obj->variance);
  
-@@ -1393,6 +1396,7 @@ static EbErrorType picture_parent_control_set_ctor(PictureParentControlSet *obje
+@@ -1288,6 +1291,7 @@ static EbErrorType picture_parent_control_set_ctor(PictureParentControlSet *obje
              block_count = 85;
          else
              block_count = 1;
@@ -118,10 +118,10 @@ index b79a16f3..2036e2f2 100644
      }
      if (init_data_ptr->calc_hist) {
 diff --git a/Source/Lib/Codec/pcs.h b/Source/Lib/Codec/pcs.h
-index 8c1fad8b..03c8b3f3 100644
+index b60c4f15..aef56097 100644
 --- a/Source/Lib/Codec/pcs.h
 +++ b/Source/Lib/Codec/pcs.h
-@@ -937,7 +937,8 @@ typedef struct PictureParentControlSet {
+@@ -785,7 +785,8 @@ typedef struct PictureParentControlSet {
      // Pre Analysis
      EbObjectWrapper *ref_pa_pic_ptr_array[MAX_NUM_OF_REF_PIC_LIST][REF_LIST_MAX_DEPTH];
      uint64_t         ref_pic_poc_array[MAX_NUM_OF_REF_PIC_LIST][REF_LIST_MAX_DEPTH];
@@ -132,7 +132,7 @@ index 8c1fad8b..03c8b3f3 100644
      uint16_t         pic_avg_variance;
  
 diff --git a/Source/Lib/Codec/pic_analysis_process.c b/Source/Lib/Codec/pic_analysis_process.c
-index f8655632..c291dd0a 100644
+index 6e8881ab..32e43f60 100644
 --- a/Source/Lib/Codec/pic_analysis_process.c
 +++ b/Source/Lib/Codec/pic_analysis_process.c
 @@ -1101,6 +1101,9 @@ static EbErrorType compute_block_mean_compute_variance(
@@ -444,10 +444,10 @@ index f8655632..c291dd0a 100644
      return return_error;
  }
 diff --git a/Source/Lib/Codec/rc_process.c b/Source/Lib/Codec/rc_process.c
-index e3a75c7c..52bcf045 100644
+index 729ab815..6d64e027 100644
 --- a/Source/Lib/Codec/rc_process.c
 +++ b/Source/Lib/Codec/rc_process.c
-@@ -1665,8 +1665,15 @@ static void generate_b64_me_qindex_map(PictureControlSet *pcs) {
+@@ -1451,8 +1451,15 @@ static void generate_b64_me_qindex_map(PictureControlSet *pcs) {
      }
  }
  
@@ -464,7 +464,7 @@ index e3a75c7c..52bcf045 100644
  #define VAR_BOOST_MAX_DELTAQ_RANGE 80
  #define VAR_BOOST_MAX_QSTEP_RATIO_BOOST 8
  
-@@ -1676,7 +1683,7 @@ int variance_comp_int(const void *a, const void *b) { return (int)*(uint16_t *)a
+@@ -1462,7 +1469,7 @@ int variance_comp_int(const void *a, const void *b) { return (int)*(uint16_t *)a
  #define SUBBLOCKS_IN_SB (SUBBLOCKS_IN_SB_DIM * SUBBLOCKS_IN_SB_DIM)
  #define SUBBLOCKS_IN_OCTILE (SUBBLOCKS_IN_SB / 8)
  
@@ -473,7 +473,7 @@ index e3a75c7c..52bcf045 100644
                                              EbBitDepth bit_depth, uint8_t octile, uint8_t curve) {
      // boost q_index based on empirical visual testing, strength 2
      // variance     qstep_ratio boost (@ base_q_idx 255)
-@@ -1687,37 +1694,39 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+@@ -1473,37 +1480,39 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
      // 1            4.806
  
      // copy sb 8x8 variance values to an array for ordering
@@ -526,7 +526,7 @@ index e3a75c7c..52bcf045 100644
                   variances_row[0],
                   variances_row[1],
                   variances_row[2],
-@@ -1730,10 +1739,17 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+@@ -1516,10 +1525,17 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
      }
  #endif
  
@@ -548,7 +548,7 @@ index e3a75c7c..52bcf045 100644
  
      // compute a boost based on a fast-growing formula
      // high and medium variance sbs essentially get no boost, while increasingly lower variance sbs get stronger boosts
-@@ -1743,16 +1759,33 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+@@ -1529,16 +1545,33 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
  
      switch (curve) {
      case 1: /* 1: low-medium contrast boosting curve */
@@ -587,7 +587,7 @@ index e3a75c7c..52bcf045 100644
  
      int32_t base_q   = svt_av1_convert_qindex_to_q_fp8(base_q_idx, bit_depth);
      int32_t target_q = (int32_t)(base_q / qstep_ratio);
-@@ -1762,14 +1795,19 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
+@@ -1548,14 +1581,19 @@ static int av1_get_deltaq_sb_variance_boost(uint8_t base_q_idx, uint16_t *varian
      case 2: /* still picture boost, tuned for SSIMULACRA2 performance on CID22 */
          boost = (int32_t)((base_q_idx + 496) * -svt_av1_compute_qdelta_fp(base_q, target_q, bit_depth) / (255 + 1024));
          break;
@@ -609,7 +609,7 @@ index e3a75c7c..52bcf045 100644
               variance,
               strength,
               qstep_ratio,
-@@ -1797,6 +1835,8 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+@@ -1583,6 +1621,8 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
  
      uint8_t min_qindex = MAX_Q_INDEX;
      uint8_t max_qindex = MIN_Q_INDEX;
@@ -618,7 +618,7 @@ index e3a75c7c..52bcf045 100644
  
  #if DEBUG_VAR_BOOST_STATS
      printf("TPL/CQP SB qindex, frame %llu, temp. level %i\n", pcs->picture_number, pcs->temporal_layer_index);
-@@ -1818,6 +1858,7 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+@@ -1604,6 +1644,7 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
  
          // adjust deltaq based on sb variance, with lower variance resulting in a lower qindex
          boost = av1_get_deltaq_sb_variance_boost(ppcs_ptr->frm_hdr.quantization_params.base_q_idx,
@@ -626,7 +626,7 @@ index e3a75c7c..52bcf045 100644
                                                   ppcs_ptr->variance[sb_addr],
                                                   scs->static_config.variance_boost_strength,
                                                   scs->static_config.encoder_bit_depth,
-@@ -1843,7 +1884,7 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+@@ -1629,7 +1670,7 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
  
      // normalize and clamp frame qindex value to maximize deltaq range
      int range                 = max_qindex - min_qindex;
@@ -635,7 +635,7 @@ index e3a75c7c..52bcf045 100644
      int normalized_base_q_idx = (int)min_qindex + (range >> 1);
  
  #if DEBUG_VAR_BOOST_QP
-@@ -1864,8 +1905,8 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
+@@ -1650,8 +1691,8 @@ void svt_variance_adjust_qp(PictureControlSet *pcs) {
          sb_ptr = pcs->sb_ptr_array[sb_addr];
  
          int offset = (int)sb_ptr->qindex - normalized_base_q_idx;
@@ -646,7 +646,7 @@ index e3a75c7c..52bcf045 100644
  
          uint8_t normalized_qindex = CLIP3(1, // q_index 0 is lossless, and is currently not supported in SVT-AV1
                                            MAX_Q_INDEX,
-@@ -3792,6 +3833,9 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3523,6 +3564,9 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
                                           (int8_t)scs->static_config.max_qp_allowed,
                                           (int8_t)scs->static_config.qp + scs->static_config.startup_qp_offset)
                          : (uint8_t)scs->static_config.qp;
@@ -656,7 +656,7 @@ index e3a75c7c..52bcf045 100644
                      // if RC mode is 0,  fixed QP is used
                      // QP scaling based on POC number for Flat IPPP structure
                      // make sure no run to run is cause
-@@ -3806,18 +3850,17 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3537,18 +3581,17 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
  
                      } else {
                          if (scs->enable_qp_scaling_flag) {
@@ -677,7 +677,7 @@ index e3a75c7c..52bcf045 100644
                              frm_hdr->quantization_params.base_q_idx = (uint8_t)CLIP3(
                                  (int32_t)quantizer_to_qindex[scs->static_config.min_qp_allowed],
                                  (int32_t)quantizer_to_qindex[scs->static_config.max_qp_allowed],
-@@ -3826,7 +3869,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3557,7 +3600,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
  
                          if (scs->static_config.use_fixed_qindex_offsets) {
                              int32_t qindex = scs->static_config.use_fixed_qindex_offsets == 1
@@ -686,7 +686,7 @@ index e3a75c7c..52bcf045 100644
                                  : frm_hdr->quantization_params
                                        .base_q_idx; // do not shut the auto QPS if use_fixed_qindex_offsets 2
  
-@@ -3871,13 +3914,53 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3602,13 +3645,53 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
                          chroma_qindex += scs->static_config.chroma_qindex_offsets[pcs->temporal_layer_index];
                      }
  
@@ -784,10 +784,10 @@ index 9462571b..d5e1bb34 100644
          // Loop over all 8x8s in a 64x64
          for (var_index = ME_TIER_ZERO_PU_8x8_0; var_index <= ME_TIER_ZERO_PU_8x8_63; var_index++) {
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index 1085a2cb..4c352eda 100644
+index e305423d..5c248888 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -5746,6 +5746,12 @@ static void copy_api_from_app(
+@@ -4619,6 +4619,12 @@ static void copy_api_from_app(
      // Sharpness
      scs->static_config.sharpness = config_struct->sharpness;
  
@@ -801,10 +801,10 @@ index 1085a2cb..4c352eda 100644
  }
  
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index 991a21a7..7b40b0d7 100644
+index d781d5bb..c61cd886 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
-@@ -916,8 +916,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
+@@ -858,8 +858,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
          return_error = EB_ErrorBadParameter;
      }
  
