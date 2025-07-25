@@ -1,0 +1,240 @@
+From 6b5a7f719814118a8e3ded676544ec318a44c3ed Mon Sep 17 00:00:00 2001
+From: Nomis101 <Nomis101@web.de>
+Date: Fri, 25 Jul 2025 08:49:06 +0200
+Subject: extend crf
+
+Port of
+https://github.com/psy-ex/svt-av1-psy/commit/55bbeb62249085955f4070321b1ee2b99dbf3df3
+https://github.com/psy-ex/svt-av1-psy/commit/fb068b6ad59f38e2fa9c91d87b9a8e969fb1501b
+
+Signed-off-by: Nomis101 <Nomis101@web.de>
+---
+ Docs/Parameters.md                |  2 +-
+ Source/API/EbSvtAv1Enc.h          |  8 +++++-
+ Source/App/app_config.c           |  2 +-
+ Source/Lib/Codec/rc_process.c     | 15 +++++++---
+ Source/Lib/Globals/enc_handle.c   |  3 ++
+ Source/Lib/Globals/enc_settings.c | 48 ++++++++++++++++++++++++++-----
+ 6 files changed, 64 insertions(+), 14 deletions(-)
+
+diff --git a/Docs/Parameters.md b/Docs/Parameters.md
+index e879cc6c..211b3262 100644
+--- a/Docs/Parameters.md
++++ b/Docs/Parameters.md
+@@ -85,7 +85,7 @@ For more information on valid values for specific keys, refer to the [EbEncSetti
+ |----------------------------------|----------------------------------|------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+ | **RateControlMode**              | --rc                             | [0-2]      | 0           | Rate control mode [0: CRF or CQP (if `--aq-mode` is 0) [Default], 1: VBR, 2: CBR]                                                                    |
+ | **QP**                           | --qp                             | [1-63]     | 35          | Initial QP level value                                                                                                                               |
+-| **CRF**                          | --crf                            | [1-63]     | 35          | Constant Rate Factor value, setting this value is equal to `--rc 0 --aq-mode 2 --qp x`                                                               |
++| **CRF**                          | --crf                            | [1-70]     | 35          | Constant Rate Factor value, setting this value is equal to `--rc 0 --aq-mode 2 --qp x`, and can be set up in quarter-step increments                                                               |
+ | **TargetBitRate**                | --tbr                            | [1-100000] | 2000        | Target Bitrate (kbps), only applicable for VBR and CBR encoding, also accepts `b`, `k`, and `m` suffixes                                             |
+ | **MaxBitRate**                   | --mbr                            | [1-100000] | 0           | Maximum Bitrate (kbps) only applicable for CRF encoding, also accepts `b`, `k`, and `m` suffixes                                                     |
+ | **UseQpFile**                    | --use-q-file                     | [0-1]      | 0           | Overwrite the encoder default picture based QP assignments and use QP values from `--qp-file`                                                        |
+diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
+index e828201c..367faf1b 100644
+--- a/Source/API/EbSvtAv1Enc.h
++++ b/Source/API/EbSvtAv1Enc.h
+@@ -974,9 +974,15 @@ typedef struct EbSvtAv1EncConfiguration {
+      */
+     uint8_t noise_norm_strength;
+ 
++    /* @brief Q index for extended CRF support
++     * Value is internally determined by CRF parameter value
++     * Default is 0 if CRF is an integer
++     */
++    uint8_t extended_crf_qindex_offset;
++
+     // clang-format off
+     /*Add 128 Byte Padding to Struct to avoid changing the size of the public configuration struct*/
+-    uint8_t padding[128 - (sizeof(uint8_t) * 4)
++    uint8_t padding[128 - (sizeof(uint8_t) * 5)
+         - sizeof(bool)
+     ];
+     // clang-format on
+diff --git a/Source/App/app_config.c b/Source/App/app_config.c
+index c55d2ff4..d0262f8f 100644
+--- a/Source/App/app_config.c
++++ b/Source/App/app_config.c
+@@ -727,7 +727,7 @@ ConfigDescription config_entry_rc[] = {
+     {QP_LONG_TOKEN, "Initial QP level value, default is 35 [1-63]"},
+     {CRF_LONG_TOKEN,
+      "Constant Rate Factor value, setting this value is equal to `--rc 0 --aq-mode 2 --qp "
+-     "x`, default is 35 [1-63]"},
++     "x`, default is 35 [1-70]"},
+ 
+     {TARGET_BIT_RATE_TOKEN,
+      "Target Bitrate (kbps), only applicable for VBR and CBR encoding, default is 7000 [1-100000]"},
+diff --git a/Source/Lib/Codec/rc_process.c b/Source/Lib/Codec/rc_process.c
+index 85eb5c85..9a3fafc1 100644
+--- a/Source/Lib/Codec/rc_process.c
++++ b/Source/Lib/Codec/rc_process.c
+@@ -3612,12 +3612,13 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                         : (uint8_t)scs->static_config.qp;
+                     const int scs_qindex = CLIP3(MIN_Q_INDEX,
+                                                  MAX_Q_INDEX,
+-                                                 quantizer_to_qindex[scs_qp]);
++                                                 quantizer_to_qindex[(uint8_t)scs->static_config.qp] + scs->static_config.extended_crf_qindex_offset);
+                     // if RC mode is 0,  fixed QP is used
+                     // QP scaling based on POC number for Flat IPPP structure
+                     // make sure no run to run is cause
+-                    if (pcs->ppcs->seq_param_changed)
+-                        rc->active_worst_quality = quantizer_to_qindex[scs_qp];
++                    if (pcs->ppcs->seq_param_changed) {
++                        rc->active_worst_quality = scs_qindex;
++                    }
+                     frm_hdr->quantization_params.base_q_idx = quantizer_to_qindex[pcs->picture_qp];
+                     if (pcs->ppcs->qp_on_the_fly == true) {
+                         pcs->picture_qp = (uint8_t)CLIP3((int32_t)scs->static_config.min_qp_allowed,
+@@ -3644,7 +3645,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                                 (int32_t)(new_qindex));
+                         }
+ 
+-                        if (scs->static_config.use_fixed_qindex_offsets) {
++                        if (scs->static_config.use_fixed_qindex_offsets || scs->static_config.extended_crf_qindex_offset) {
+                             int32_t qindex = scs->static_config.use_fixed_qindex_offsets == 1
+                                 ? scs_qindex
+                                 : frm_hdr->quantization_params
+@@ -3655,6 +3656,11 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                             else
+                                 qindex += scs->static_config.key_frame_qindex_offset;
+ 
++                            // Extended CRF range (63.25 - 70), add offset to all temporal layers to truncate QP scaling
++                            if (scs->static_config.qp == MAX_QP_VALUE && scs->static_config.extended_crf_qindex_offset) {
++                                qindex += scs->static_config.extended_crf_qindex_offset;
++                            }
++
+                             qindex = CLIP3(quantizer_to_qindex[scs->static_config.min_qp_allowed],
+                                            quantizer_to_qindex[scs->static_config.max_qp_allowed],
+                                            qindex);
+@@ -3726,6 +3732,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                     chroma_qindex -= CLIP3(0, 8, (chroma_qindex_adjustment / 6) - 8);
+                  }
+ 
++                    chroma_qindex += scs->static_config.extended_crf_qindex_offset;
+                     chroma_qindex = CLIP3(quantizer_to_qindex[scs->static_config.min_qp_allowed],
+                                           quantizer_to_qindex[scs->static_config.max_qp_allowed],
+                                           chroma_qindex);
+diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
+index 38a12eff..ad954725 100644
+--- a/Source/Lib/Globals/enc_handle.c
++++ b/Source/Lib/Globals/enc_handle.c
+@@ -4630,6 +4630,9 @@ static void copy_api_from_app(
+     
+     // QP scaling compression
+     scs->static_config.qp_scale_compress_strength = config_struct->qp_scale_compress_strength;
++    
++    // Extended CRF
++    scs->static_config.extended_crf_qindex_offset = config_struct->extended_crf_qindex_offset;
+     return;
+ }
+ 
+diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
+index 4d2337a3..4fdeed92 100644
+--- a/Source/Lib/Globals/enc_settings.c
++++ b/Source/Lib/Globals/enc_settings.c
+@@ -236,6 +236,13 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
+         return_error = EB_ErrorBadParameter;
+     }
+ 
++    if ((config->enable_adaptive_quantization || config->variance_boost_strength) && config->extended_crf_qindex_offset > (7 * 4)) {
++        SVT_ERROR("Instance %u: %s must be [0 - %d]\n",
++                  channel_number + 1,
++                  "CRF",
++                  70);
++        return_error = EB_ErrorBadParameter;
++    }
+     if (config->qp > MAX_QP_VALUE) {
+         SVT_ERROR("Instance %u: %s must be [0 - %d]\n",
+                   channel_number + 1,
+@@ -1043,6 +1050,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
+     config_ptr->avif                              = false;
+     config_ptr->qp_scale_compress_strength        = 1;
+     config_ptr->noise_norm_strength               = 1;
++    config_ptr->extended_crf_qindex_offset        = 0;
+     return return_error;
+ }
+ 
+@@ -1061,6 +1069,10 @@ static const char *level_to_str(unsigned in) {
+     return ret;
+ }
+ 
++static double get_extended_crf(EbSvtAv1EncConfiguration *config_ptr) {
++    return (double)config_ptr->qp + (double)config_ptr->extended_crf_qindex_offset / 4;
++}
++
+ void svt_av1_print_lib_params(SequenceControlSet *scs) {
+     EbSvtAv1EncConfiguration *config = &scs->static_config;
+ 
+@@ -1116,16 +1128,16 @@ void svt_av1_print_lib_params(SequenceControlSet *scs) {
+                 if (config->max_bit_rate) {
+                     SVT_INFO(
+                         "SVT [config]: BRC mode / %s / max bitrate (kbps)\t\t\t: %s / %d / "
+-                        "%d\n",
++                        "%.2f\n",
+                         scs->tpl || scs->static_config.enable_variance_boost ? "rate factor" : "CQP Assignment",
+                         scs->tpl || scs->static_config.enable_variance_boost ? "capped CRF" : "CQP",
+-                        scs->static_config.qp,
++                        get_extended_crf(config),
+                         (int)config->max_bit_rate / 1000);
+                 } else {
+-                    SVT_INFO("SVT [config]: BRC mode / %s \t\t\t\t\t: %s / %d \n",
++                    SVT_INFO("SVT [config]: BRC mode / %s \t\t\t\t\t: %s / %.2f \n",
+                              scs->tpl || scs->static_config.enable_variance_boost ? "rate factor" : "CQP Assignment",
+                              scs->tpl || scs->static_config.enable_variance_boost ? "CRF" : "CQP",
+-                             scs->static_config.qp);
++                             get_extended_crf(config));
+                 }
+                 break;
+             case SVT_AV1_RC_MODE_VBR:
+@@ -1287,6 +1299,21 @@ static EbErrorType str_to_uint(const char *nptr, uint32_t *out, char **nextptr)
+     return EB_ErrorNone;
+ }
+ 
++static EbErrorType str_to_double(const char *nptr, double *out, char **nextptr) {
++    char    *endptr;
++    double  val;
++
++    val = strtod(nptr, &endptr);
++
++    if (endptr == nptr || (!nextptr && *endptr))
++        return EB_ErrorBadParameter;
++
++    *out = val;
++    if (nextptr)
++        *nextptr = endptr;
++    return EB_ErrorNone;
++}
++
+ //assume the input list of values are in the format of "[v1,v2,v3,...]"
+ static EbErrorType parse_list_s32(const char *nptr, int32_t *list, size_t n) {
+     const char *ptr = nptr;
+@@ -1411,16 +1438,23 @@ static EbErrorType str_to_bool(const char *nptr, bool *out) {
+ }
+ 
+ static EbErrorType str_to_crf(const char *nptr, EbSvtAv1EncConfiguration *config_struct) {
+-    uint32_t    crf;
++    double      crf;
+     EbErrorType return_error;
+ 
+-    return_error = str_to_uint(nptr, &crf, NULL);
++    return_error = str_to_double(nptr, &crf, NULL);
+     if (return_error == EB_ErrorBadParameter)
+         return return_error;
++    if (crf < 0)
++        return EB_ErrorBadParameter;
++
++    uint32_t extended_q_index = (uint32_t)(crf * 4);
++    uint32_t qp = AOMMIN(MAX_QP_VALUE, (uint32_t)crf);
++    uint32_t extended_crf_qindex_offset = extended_q_index - qp * 4;
+ 
+-    config_struct->qp                           = crf;
++    config_struct->qp                           = qp;
+     config_struct->rate_control_mode            = SVT_AV1_RC_MODE_CQP_OR_CRF;
+     config_struct->enable_adaptive_quantization = 2;
++    config_struct->extended_crf_qindex_offset   = extended_crf_qindex_offset;
+ 
+     return EB_ErrorNone;
+ }
+-- 
+2.50.1
+
