@@ -1,11 +1,9 @@
-__deps__ := CPUINFO
-
-$(eval $(call import.MODULE.defs,SVT-AV1,svt-av1,$(__deps__)))
+$(eval $(call import.MODULE.defs,SVT-AV1,svt-av1))
 $(eval $(call import.CONTRIB.defs,SVT-AV1))
 
-SVT-AV1.FETCH.url      = https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/31fc5ca61f3a0459eade6c675ee0116800c9ab05.tar.gz
-SVT-AV1.FETCH.sha256   = 87b0b79997f2e67b59bfc74b813b161111d3ef7d4d4c89307fe91322b1d4a99f
-SVT-AV1.FETCH.basename = SVT-AV1-31fc5ca61f3a0459eade6c675ee0116800c9ab05.tar.gz
+SVT-AV1.FETCH.url     = https://github.com/HandBrake/HandBrake-contribs/releases/download/contribs2/SVT-AV1-v3.1.0.tar.gz
+SVT-AV1.FETCH.url    += https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v3.1.0/SVT-AV1-v3.1.0.tar.gz
+SVT-AV1.FETCH.sha256  = 3999586c261dc3d8690fd1489fc74da4e0fdff9159c8ce2b76ddfac001ad96d3
 
 SVT-AV1.GCC.args.c_std =
 

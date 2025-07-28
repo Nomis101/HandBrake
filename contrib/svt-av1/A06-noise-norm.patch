@@ -29,7 +29,7 @@ index 1882976b..e879cc6c 100644
  | **TemporalFilteringStrength**    | --tf-strength                    | [0-4]      | 3           | Manually adjust temporal filtering strength. Higher values = stronger temporal filtering                                                             |
  | **LuminanceQpBias**              | --luminance-qp-bias              | [0-100]    | 0           | Adjusts a frame's QP based on its average luma value                                                                                                 |
  | **Sharpness**                    | --sharpness                      | [-7-7]     | 0           | Bias towards decreased/increased sharpness                                                                                                           |
-+| **NoiseNormStrength**            |  --noise-norm-strength           | [0-4]      | 0           | Selectively boost AC coefficients to improve fine detail retention in certain circumstances                  
++| **NoiseNormStrength**            | --noise-norm-strength           | [0-4]      | 0           | Selectively boost AC coefficients to improve fine detail retention in certain circumstances                  
 +|
  
  
