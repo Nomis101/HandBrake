@@ -1,6 +1,6 @@
-From 6b5a7f719814118a8e3ded676544ec318a44c3ed Mon Sep 17 00:00:00 2001
+From 546a0c57ddee606e54f3f22ef691b370fe349d24 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Fri, 25 Jul 2025 08:49:06 +0200
+Date: Sun, 3 Aug 2025 08:00:20 +0200
 Subject: extend crf
 
 Port of
@@ -18,7 +18,7 @@ Signed-off-by: Nomis101 <Nomis101@web.de>
  6 files changed, 64 insertions(+), 14 deletions(-)
 
 diff --git a/Docs/Parameters.md b/Docs/Parameters.md
-index e879cc6c..211b3262 100644
+index 92219abc..64c18ae8 100644
 --- a/Docs/Parameters.md
 +++ b/Docs/Parameters.md
 @@ -85,7 +85,7 @@ For more information on valid values for specific keys, refer to the [EbEncSetti
@@ -31,10 +31,10 @@ index e879cc6c..211b3262 100644
  | **MaxBitRate**                   | --mbr                            | [1-100000] | 0           | Maximum Bitrate (kbps) only applicable for CRF encoding, also accepts `b`, `k`, and `m` suffixes                                                     |
  | **UseQpFile**                    | --use-q-file                     | [0-1]      | 0           | Overwrite the encoder default picture based QP assignments and use QP values from `--qp-file`                                                        |
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index e828201c..367faf1b 100644
+index a91aa43a..6d5c8900 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
-@@ -974,9 +974,15 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -986,6 +986,12 @@ typedef struct EbSvtAv1EncConfiguration {
       */
      uint8_t noise_norm_strength;
  
@@ -44,18 +44,23 @@ index e828201c..367faf1b 100644
 +     */
 +    uint8_t extended_crf_qindex_offset;
 +
+ #if FTR_SFRAME_POSI
+     /* @brief Indicates where to insert an S-Frame, only available when sframe_mode is SFRAME_FLEXIBLE_ARF */
+     SvtAv1SFramePositions sframe_posi;
+@@ -993,7 +999,7 @@ typedef struct EbSvtAv1EncConfiguration {
+ 
      // clang-format off
      /*Add 128 Byte Padding to Struct to avoid changing the size of the public configuration struct*/
 -    uint8_t padding[128 - (sizeof(uint8_t) * 4)
 +    uint8_t padding[128 - (sizeof(uint8_t) * 5)
          - sizeof(bool)
-     ];
-     // clang-format on
+ #if FTR_SFRAME_POSI
+         - sizeof(SvtAv1SFramePositions)
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index c55d2ff4..d0262f8f 100644
+index fe123896..d31383c9 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
-@@ -727,7 +727,7 @@ ConfigDescription config_entry_rc[] = {
+@@ -730,7 +730,7 @@ ConfigDescription config_entry_rc[] = {
      {QP_LONG_TOKEN, "Initial QP level value, default is 35 [1-63]"},
      {CRF_LONG_TOKEN,
       "Constant Rate Factor value, setting this value is equal to `--rc 0 --aq-mode 2 --qp "
@@ -115,10 +120,10 @@ index 85eb5c85..9a3fafc1 100644
                                            quantizer_to_qindex[scs->static_config.max_qp_allowed],
                                            chroma_qindex);
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index 38a12eff..ad954725 100644
+index e7d8a5c7..717e5078 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -4630,6 +4630,9 @@ static void copy_api_from_app(
+@@ -4648,6 +4648,9 @@ static void copy_api_from_app(
      
      // QP scaling compression
      scs->static_config.qp_scale_compress_strength = config_struct->qp_scale_compress_strength;
@@ -129,7 +134,7 @@ index 38a12eff..ad954725 100644
  }
  
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index 4d2337a3..4fdeed92 100644
+index dfb6cbde..1846073f 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
 @@ -236,6 +236,13 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
@@ -146,15 +151,15 @@ index 4d2337a3..4fdeed92 100644
      if (config->qp > MAX_QP_VALUE) {
          SVT_ERROR("Instance %u: %s must be [0 - %d]\n",
                    channel_number + 1,
-@@ -1043,6 +1050,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
+@@ -1059,6 +1066,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
      config_ptr->avif                              = false;
      config_ptr->qp_scale_compress_strength        = 1;
      config_ptr->noise_norm_strength               = 1;
 +    config_ptr->extended_crf_qindex_offset        = 0;
-     return return_error;
- }
- 
-@@ -1061,6 +1069,10 @@ static const char *level_to_str(unsigned in) {
+ #if FTR_SFRAME_POSI
+     config_ptr->sframe_posi.sframe_num   = 0;
+     config_ptr->sframe_posi.sframe_posis = NULL;
+@@ -1081,6 +1089,10 @@ static const char *level_to_str(unsigned in) {
      return ret;
  }
  
@@ -165,7 +170,7 @@ index 4d2337a3..4fdeed92 100644
  void svt_av1_print_lib_params(SequenceControlSet *scs) {
      EbSvtAv1EncConfiguration *config = &scs->static_config;
  
-@@ -1116,16 +1128,16 @@ void svt_av1_print_lib_params(SequenceControlSet *scs) {
+@@ -1136,16 +1148,16 @@ void svt_av1_print_lib_params(SequenceControlSet *scs) {
                  if (config->max_bit_rate) {
                      SVT_INFO(
                          "SVT [config]: BRC mode / %s / max bitrate (kbps)\t\t\t: %s / %d / "
@@ -186,7 +191,7 @@ index 4d2337a3..4fdeed92 100644
                  }
                  break;
              case SVT_AV1_RC_MODE_VBR:
-@@ -1287,6 +1299,21 @@ static EbErrorType str_to_uint(const char *nptr, uint32_t *out, char **nextptr)
+@@ -1307,6 +1319,21 @@ static EbErrorType str_to_uint(const char *nptr, uint32_t *out, char **nextptr)
      return EB_ErrorNone;
  }
  
@@ -208,7 +213,7 @@ index 4d2337a3..4fdeed92 100644
  //assume the input list of values are in the format of "[v1,v2,v3,...]"
  static EbErrorType parse_list_s32(const char *nptr, int32_t *list, size_t n) {
      const char *ptr = nptr;
-@@ -1411,16 +1438,23 @@ static EbErrorType str_to_bool(const char *nptr, bool *out) {
+@@ -1431,16 +1458,23 @@ static EbErrorType str_to_bool(const char *nptr, bool *out) {
  }
  
  static EbErrorType str_to_crf(const char *nptr, EbSvtAv1EncConfiguration *config_struct) {
