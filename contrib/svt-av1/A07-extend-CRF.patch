@@ -78,7 +78,7 @@ index 85eb5c85..9a3fafc1 100644
                      const int scs_qindex = CLIP3(MIN_Q_INDEX,
                                                   MAX_Q_INDEX,
 -                                                 quantizer_to_qindex[scs_qp]);
-+                                                 quantizer_to_qindex[(uint8_t)scs->static_config.qp] + scs->static_config.extended_crf_qindex_offset);
++                                                 quantizer_to_qindex[scs_qp] + scs->static_config.extended_crf_qindex_offset);
                      // if RC mode is 0,  fixed QP is used
                      // QP scaling based on POC number for Flat IPPP structure
                      // make sure no run to run is cause
