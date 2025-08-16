@@ -28,6 +28,7 @@ Download available from Microsoft:
 #### Video
 
 - Added an option to choose the encoder color range
+- Improved Framerate Shaper metrics performance for high resolution frames
 - Fixed VCN encoder presets (#6974)
 - Updated NVEnc CQ range (#6418)
 
@@ -43,6 +44,10 @@ Download available from Microsoft:
 - SubRip/UTF-8 subtitles are now passed through to MKV without conversion to SSA
 - Fixed a crash that could happen when burning bitmap subtitles
 
+#### Filters
+
+- Fixed a crash that could happen when using the Chroma Smooth filter (#7033)
+
 #### Third-party libraries
 
 - Updated libraries
@@ -50,6 +55,7 @@ Download available from Microsoft:
   - FFmpeg 7.1.1 (decoding and filters)
   - HarfBuzz 11.3.3 (subtitles)
   - libass 0.17.4 (subtitles)
+  - libdovi 3.3.2 (Dolby Vision dynamic metadata)
   - libiconv 1.18 (character encoding support)
   - libjpeg-turbo 3.1.1 (preview image compression)
   - liblzma (xz) 5.8.1 (LZMA video decoding, e.g. TIFF)
@@ -73,14 +79,14 @@ Download available from Microsoft:
 
 ### Mac
 
+- Added support for the VideoToolbox AV1 hardware decoder
 - Added a Metal accelerated Render Sub filter
 - Added a contextual menu to the presets popover
 - Updated Auto Naming Preferences to add "{angle}" as a filename generation option (#6086)
 - Reduced CPU usage when using VideoToolbox decoders and encoders
 - Encoded files are now excluded from Time Machine until they are completed
-- Fixed queue jobs not being reloaded properly when the source is an .iso file
+- Fixed queue jobs not being reloaded properly when the source is a .iso file
 - Fixed "Same as source" destination option, it didn't work properly in some case
-- Fixed reloading jobs from the queue when the source is a .iso file
 - Updated existing and maintained locales
 
 ### Windows
@@ -88,6 +94,7 @@ Download available from Microsoft:
 - Added a new preference "Default Range Mode for titles". See Preferences -> Advanced (#6385)
 - Added a new preference to run a custom action when the queue completes. See Preferences -> When Done (#4851)
 - Added "{destination_folder}" as option on the "Encode Completed" "Send File To" option.
+- Added support for DirectX based AV1 video decoding when using the Media Foundation encoder on ARM devices
 - Updated Auto Naming Preferences to add "{angle}" as a filename generation option (#6086)
 - Performance Optimisations for ARM64 devices running Windows
 - Minor miscellaneous UI improvements.

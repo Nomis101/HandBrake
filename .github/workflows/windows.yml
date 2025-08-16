@@ -76,7 +76,7 @@ jobs:
           ~/.cargo/bin/cargo-capi
           ~/.cargo/bin/cargo-cbuild
           ~/.cargo/bin/cargo-cinstall
-        key: windows-cargo-c-toolchain
+        key: ${{ runner.os }}-${{ runner.arch }}-windows-cargo-c-toolchain
 
     - name: Setup Environment
       run: |
@@ -138,7 +138,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Download LibHandBrake
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v5
       with:
        name: LibHandBrake
        path: win/CS/HandBrakeWPF/bin/publish
@@ -209,7 +209,7 @@ jobs:
     - uses: actions/checkout@v4
        
     - name: Download LibHandBrake_ARM64
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v5
       with:
        name: LibHandBrake_ARM64
        path: win/CS/HandBrakeWPF/bin/publish
