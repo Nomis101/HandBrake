@@ -1,6 +1,6 @@
-From 546a0c57ddee606e54f3f22ef691b370fe349d24 Mon Sep 17 00:00:00 2001
+From 8843ccc2b549ed516ae0863cfe57fd29f10f7e85 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Sun, 3 Aug 2025 08:00:20 +0200
+Date: Sat, 16 Aug 2025 17:19:07 +0200
 Subject: extend crf
 
 Port of
@@ -12,13 +12,13 @@ Signed-off-by: Nomis101 <Nomis101@web.de>
  Docs/Parameters.md                |  2 +-
  Source/API/EbSvtAv1Enc.h          |  8 +++++-
  Source/App/app_config.c           |  2 +-
- Source/Lib/Codec/rc_process.c     | 15 +++++++---
- Source/Lib/Globals/enc_handle.c   |  3 ++
+ Source/Lib/Codec/rc_process.c     | 10 +++++--
+ Source/Lib/Globals/enc_handle.c   |  2 ++
  Source/Lib/Globals/enc_settings.c | 48 ++++++++++++++++++++++++++-----
- 6 files changed, 64 insertions(+), 14 deletions(-)
+ 6 files changed, 60 insertions(+), 12 deletions(-)
 
 diff --git a/Docs/Parameters.md b/Docs/Parameters.md
-index 92219abc..64c18ae8 100644
+index 06447f6e..e7ff4ec5 100644
 --- a/Docs/Parameters.md
 +++ b/Docs/Parameters.md
 @@ -85,7 +85,7 @@ For more information on valid values for specific keys, refer to the [EbEncSetti
@@ -31,10 +31,10 @@ index 92219abc..64c18ae8 100644
  | **MaxBitRate**                   | --mbr                            | [1-100000] | 0           | Maximum Bitrate (kbps) only applicable for CRF encoding, also accepts `b`, `k`, and `m` suffixes                                                     |
  | **UseQpFile**                    | --use-q-file                     | [0-1]      | 0           | Overwrite the encoder default picture based QP assignments and use QP values from `--qp-file`                                                        |
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index a91aa43a..6d5c8900 100644
+index 8d76acf8..2c8c0ace 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
-@@ -986,6 +986,12 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -974,6 +974,12 @@ typedef struct EbSvtAv1EncConfiguration {
       */
      uint8_t noise_norm_strength;
  
@@ -47,7 +47,7 @@ index a91aa43a..6d5c8900 100644
  #if FTR_SFRAME_POSI
      /* @brief Indicates where to insert an S-Frame, only available when sframe_mode is SFRAME_FLEXIBLE_ARF */
      SvtAv1SFramePositions sframe_posi;
-@@ -993,7 +999,7 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -981,7 +987,7 @@ typedef struct EbSvtAv1EncConfiguration {
  
      // clang-format off
      /*Add 128 Byte Padding to Struct to avoid changing the size of the public configuration struct*/
@@ -57,10 +57,10 @@ index a91aa43a..6d5c8900 100644
  #if FTR_SFRAME_POSI
          - sizeof(SvtAv1SFramePositions)
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index fe123896..d31383c9 100644
+index 36f7e3c1..1e695c6d 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
-@@ -730,7 +730,7 @@ ConfigDescription config_entry_rc[] = {
+@@ -731,7 +731,7 @@ ConfigDescription config_entry_rc[] = {
      {QP_LONG_TOKEN, "Initial QP level value, default is 35 [1-63]"},
      {CRF_LONG_TOKEN,
       "Constant Rate Factor value, setting this value is equal to `--rc 0 --aq-mode 2 --qp "
@@ -70,10 +70,10 @@ index fe123896..d31383c9 100644
      {TARGET_BIT_RATE_TOKEN,
       "Target Bitrate (kbps), only applicable for VBR and CBR encoding, default is 7000 [1-100000]"},
 diff --git a/Source/Lib/Codec/rc_process.c b/Source/Lib/Codec/rc_process.c
-index 85eb5c85..9a3fafc1 100644
+index 061464ee..3f49907b 100644
 --- a/Source/Lib/Codec/rc_process.c
 +++ b/Source/Lib/Codec/rc_process.c
-@@ -3612,12 +3612,13 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3655,7 +3655,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
                          : (uint8_t)scs->static_config.qp;
                      const int scs_qindex = CLIP3(MIN_Q_INDEX,
                                                   MAX_Q_INDEX,
@@ -82,16 +82,8 @@ index 85eb5c85..9a3fafc1 100644
                      // if RC mode is 0,  fixed QP is used
                      // QP scaling based on POC number for Flat IPPP structure
                      // make sure no run to run is cause
--                    if (pcs->ppcs->seq_param_changed)
--                        rc->active_worst_quality = quantizer_to_qindex[scs_qp];
-+                    if (pcs->ppcs->seq_param_changed) {
-+                        rc->active_worst_quality = scs_qindex;
-+                    }
-                     frm_hdr->quantization_params.base_q_idx = quantizer_to_qindex[pcs->picture_qp];
-                     if (pcs->ppcs->qp_on_the_fly == true) {
-                         pcs->picture_qp = (uint8_t)CLIP3((int32_t)scs->static_config.min_qp_allowed,
-@@ -3644,7 +3645,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
-                                 (int32_t)(new_qindex));
+@@ -3684,7 +3684,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                             frm_hdr->quantization_params.base_q_idx = clamp_qindex(scs, new_qindex);
                          }
  
 -                        if (scs->static_config.use_fixed_qindex_offsets) {
@@ -99,7 +91,7 @@ index 85eb5c85..9a3fafc1 100644
                              int32_t qindex = scs->static_config.use_fixed_qindex_offsets == 1
                                  ? scs_qindex
                                  : frm_hdr->quantization_params
-@@ -3655,6 +3656,11 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3695,6 +3695,11 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
                              else
                                  qindex += scs->static_config.key_frame_qindex_offset;
  
@@ -108,33 +100,32 @@ index 85eb5c85..9a3fafc1 100644
 +                                qindex += scs->static_config.extended_crf_qindex_offset;
 +                            }
 +
-                             qindex = CLIP3(quantizer_to_qindex[scs->static_config.min_qp_allowed],
-                                            quantizer_to_qindex[scs->static_config.max_qp_allowed],
-                                            qindex);
-@@ -3726,6 +3732,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
-                     chroma_qindex -= CLIP3(0, 8, (chroma_qindex_adjustment / 6) - 8);
-                  }
+                             qindex = clamp_qindex(scs, qindex);
+ 
+                             frm_hdr->quantization_params.base_q_idx = qindex;
+@@ -3760,6 +3765,7 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                         chroma_qindex -= CLIP3(0, 8, (chroma_qindex_adjustment / 6) - 8);
+                     }
  
 +                    chroma_qindex += scs->static_config.extended_crf_qindex_offset;
-                     chroma_qindex = CLIP3(quantizer_to_qindex[scs->static_config.min_qp_allowed],
-                                           quantizer_to_qindex[scs->static_config.max_qp_allowed],
-                                           chroma_qindex);
+                     chroma_qindex = clamp_qindex(scs, chroma_qindex);
+ 
+                     // Calculate chroma delta q for Cb, and clip it to a valid range
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index e7d8a5c7..717e5078 100644
+index 84660851..537e540b 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -4648,6 +4648,9 @@ static void copy_api_from_app(
-     
-     // QP scaling compression
-     scs->static_config.qp_scale_compress_strength = config_struct->qp_scale_compress_strength;
-+    
+@@ -4640,6 +4640,8 @@ static void copy_api_from_app(
+         scs->static_config.variance_boost_curve = 3;
+     }
+ 
 +    // Extended CRF
 +    scs->static_config.extended_crf_qindex_offset = config_struct->extended_crf_qindex_offset;
      return;
  }
  
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index dfb6cbde..1846073f 100644
+index abf6192d..5f78e125 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
 @@ -236,6 +236,13 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
@@ -153,7 +144,7 @@ index dfb6cbde..1846073f 100644
                    channel_number + 1,
 @@ -1059,6 +1066,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
      config_ptr->avif                              = false;
-     config_ptr->qp_scale_compress_strength        = 1;
+     config_ptr->qp_scale_compress_strength        = 0;
      config_ptr->noise_norm_strength               = 1;
 +    config_ptr->extended_crf_qindex_offset        = 0;
  #if FTR_SFRAME_POSI
@@ -191,7 +182,7 @@ index dfb6cbde..1846073f 100644
                  }
                  break;
              case SVT_AV1_RC_MODE_VBR:
-@@ -1307,6 +1319,21 @@ static EbErrorType str_to_uint(const char *nptr, uint32_t *out, char **nextptr)
+@@ -1306,6 +1318,21 @@ static EbErrorType str_to_uint(const char *nptr, uint32_t *out, char **nextptr)
      return EB_ErrorNone;
  }
  
@@ -213,7 +204,7 @@ index dfb6cbde..1846073f 100644
  //assume the input list of values are in the format of "[v1,v2,v3,...]"
  static EbErrorType parse_list_s32(const char *nptr, int32_t *list, size_t n) {
      const char *ptr = nptr;
-@@ -1431,16 +1458,23 @@ static EbErrorType str_to_bool(const char *nptr, bool *out) {
+@@ -1430,16 +1457,23 @@ static EbErrorType str_to_bool(const char *nptr, bool *out) {
  }
  
  static EbErrorType str_to_crf(const char *nptr, EbSvtAv1EncConfiguration *config_struct) {
