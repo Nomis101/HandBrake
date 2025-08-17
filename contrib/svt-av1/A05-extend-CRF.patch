@@ -145,7 +145,7 @@ index abf6192d..5f78e125 100644
 @@ -1059,6 +1066,7 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration *config_ptr) {
      config_ptr->avif                              = false;
      config_ptr->qp_scale_compress_strength        = 0;
-     config_ptr->noise_norm_strength               = 1;
+     config_ptr->noise_norm_strength               = 0;
 +    config_ptr->extended_crf_qindex_offset        = 0;
  #if FTR_SFRAME_POSI
      config_ptr->sframe_posi.sframe_num   = 0;

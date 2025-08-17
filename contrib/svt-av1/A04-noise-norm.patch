@@ -1,6 +1,6 @@
-From 340b3af44db32257bdfd295ad2f43d1f656afcde Mon Sep 17 00:00:00 2001
+From 1c578af9864bbb76eab48acadc22b05f25e19de7 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Sat, 16 Aug 2025 09:45:33 +0200
+Date: Sun, 17 Aug 2025 18:51:40 +0200
 Subject: noise norm
 
 Port of
@@ -15,11 +15,11 @@ Signed-off-by: Nomis101 <Nomis101@web.de>
  Docs/Parameters.md                |   2 +
  Source/API/EbSvtAv1Enc.h          |  10 ++-
  Source/App/app_config.c           |   8 ++
- Source/Lib/Codec/full_loop.c      | 127 ++++++++++++++++++++++++++++++
+ Source/Lib/Codec/full_loop.c      | 126 ++++++++++++++++++++++++++++++
  Source/Lib/Codec/pcs.h            |   1 +
  Source/Lib/Globals/enc_handle.c   |   4 +-
- Source/Lib/Globals/enc_settings.c |  13 ++-
- 7 files changed, 162 insertions(+), 3 deletions(-)
+ Source/Lib/Globals/enc_settings.c |  12 +++
+ 7 files changed, 161 insertions(+), 2 deletions(-)
 
 diff --git a/Docs/Parameters.md b/Docs/Parameters.md
 index f80a43f4..06447f6e 100644
@@ -35,7 +35,7 @@ index f80a43f4..06447f6e 100644
  
  ### **UseFixedQIndexOffsets** and more information
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index 6268629d..8d76acf8 100644
+index 6268629d..45039574 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
 @@ -966,6 +966,14 @@ typedef struct EbSvtAv1EncConfiguration {
@@ -46,7 +46,7 @@ index 6268629d..8d76acf8 100644
 +     * to boost AC coefficients in low-noise blocks.
 +     * Min value is 0.
 +     * Max value is 4.
-+     * Default is 3.
++     * Default is 0 (off).
 +     */
 +    uint8_t noise_norm_strength;
 +
@@ -96,23 +96,16 @@ index 55ea896b..36f7e3c1 100644
      {NULL, NULL}};
  
 diff --git a/Source/Lib/Codec/full_loop.c b/Source/Lib/Codec/full_loop.c
-index 71af54b1..e764372f 100644
+index 71af54b1..81de64d8 100644
 --- a/Source/Lib/Codec/full_loop.c
 +++ b/Source/Lib/Codec/full_loop.c
-@@ -1464,6 +1464,133 @@ uint8_t svt_av1_compute_cul_level_c(const int16_t *const scan, const int32_t *co
+@@ -1464,6 +1464,119 @@ uint8_t svt_av1_compute_cul_level_c(const int16_t *const scan, const int32_t *co
      return (uint8_t)cul_level;
  }
  
-+void svt_av1_perform_noise_normalization(MacroblockPlane *p,
-+    QuantParam *qparam,
-+    TranLow *coeff_ptr,
-+    TranLow *qcoeff_ptr,
-+    TranLow *dqcoeff_ptr,
-+    TxSize tx_size,
-+    TxType tx_type,
-+    uint16_t *eob,
-+    PictureControlSet *pcs)
-+{
++void svt_av1_perform_noise_normalization(MacroblockPlane *p, QuantParam *qparam, TranLow *coeff_ptr,
++                                         TranLow *qcoeff_ptr, TranLow *dqcoeff_ptr, TxSize tx_size, TxType tx_type,
++                                         uint16_t *eob, PictureControlSet *pcs) {
 +    const int shift = av1_get_tx_scale_tab[tx_size];
 +    const int width = get_txb_wide_tab[tx_size];
 +    const int height = get_txb_high_tab[tx_size];
@@ -139,18 +132,11 @@ index 71af54b1..e764372f 100644
 +
 +    // Determine threshold based on user-configurable noisenorm_strength
 +    switch (noisenorm_strength) {
-+        case 1:
-+            thresh = 9;
-+            break;
-+        case 2:
-+            thresh = 8;
-+            break;
-+        case 3:
-+            thresh = 6;
-+            break;
-+        default:
-+            thresh = 4;
-+            break;
++        case 1: thresh = 9; break;
++        case 2: thresh = 8; break;
++        case 3: thresh = 6; break;
++        case 4: thresh = 4; break;
++        default: assert(0); break;
 +    }
 +
 +    if (*eob > 1) {
@@ -233,6 +219,26 @@ index 71af54b1..e764372f 100644
  uint8_t svt_aom_quantize_inv_quantize(PictureControlSet *pcs, ModeDecisionContext *ctx, int32_t *coeff,
                                        int32_t *quant_coeff, int32_t *recon_coeff, uint32_t qindex,
                                        int32_t segmentation_qp_offset, TxSize txsize, uint16_t *eob,
+@@ -1697,6 +1810,19 @@ uint8_t svt_aom_quantize_inv_quantize(PictureControlSet *pcs, ModeDecisionContex
+                            (component_type == COMPONENT_LUMA) ? 0 : 1);
+     }
+ 
++    if (is_encode_pass && *eob != 0 && tx_type != IDTX && (component_type == COMPONENT_LUMA)) {
++        svt_av1_perform_noise_normalization(
++            &candidate_plane,
++            &qparam,
++            (TranLow *)coeff,
++            quant_coeff,
++            (TranLow *)recon_coeff,
++            txsize,
++            tx_type,
++            eob,
++            pcs);
++    }
++
+     if (!ctx->rate_est_ctrls.update_skip_ctx_dc_sign_ctx)
+         return 0;
+ 
 diff --git a/Source/Lib/Codec/pcs.h b/Source/Lib/Codec/pcs.h
 index 62394e05..fe755283 100644
 --- a/Source/Lib/Codec/pcs.h
@@ -246,7 +252,7 @@ index 62394e05..fe755283 100644
  
  /**************************************
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index 4ee19042..f1b6c89f 100644
+index ea699b27..84660851 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
 @@ -1526,6 +1526,7 @@ EB_API EbErrorType svt_av1_enc_init(EbComponentType *svt_enc_component)
@@ -268,7 +274,7 @@ index 4ee19042..f1b6c89f 100644
      scs->static_config.rtc = ((EbSvtAv1EncConfiguration*)config_struct)->rtc;
      if (scs->static_config.rtc && scs->static_config.pred_structure != LOW_DELAY) {
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index 2c2e8802..abf6192d 100644
+index 2c2e8802..d05e7e14 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
 @@ -900,6 +900,11 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
@@ -287,7 +293,7 @@ index 2c2e8802..abf6192d 100644
      config_ptr->lossless                          = false;
      config_ptr->avif                              = false;
      config_ptr->qp_scale_compress_strength        = 0;
-+    config_ptr->noise_norm_strength               = 1;
++    config_ptr->noise_norm_strength               = 0;
  #if FTR_SFRAME_POSI
      config_ptr->sframe_posi.sframe_num   = 0;
      config_ptr->sframe_posi.sframe_posis = NULL;
@@ -303,11 +309,10 @@ index 2c2e8802..abf6192d 100644
      }
  #if DEBUG_BUFFERS
      SVT_INFO("SVT [config]: INPUT / OUTPUT \t\t\t\t\t\t\t: %d / %d\n",
-@@ -2053,7 +2064,7 @@ EB_API EbErrorType svt_av1_enc_parse_parameter(EbSvtAv1EncConfiguration *config_
-         {"fast-decode", &config_struct->fast_decode},
+@@ -2054,6 +2065,7 @@ EB_API EbErrorType svt_av1_enc_parse_parameter(EbSvtAv1EncConfiguration *config_
          {"luminance-qp-bias", &config_struct->luminance_qp_bias},
          {"enable-tf", &config_struct->enable_tf},
--        {"tf-strength", &config_struct->tf_strength},
+         {"tf-strength", &config_struct->tf_strength},
 +        {"noise-norm-strength", &config_struct->noise_norm_strength},
      };
      const size_t uint8_opts_size = sizeof(uint8_opts) / sizeof(uint8_opts[0]);
