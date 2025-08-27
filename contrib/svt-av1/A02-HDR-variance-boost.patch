@@ -1,6 +1,6 @@
-From b1b158da7c9d2a0b6e7778c816116088c2ddbc24 Mon Sep 17 00:00:00 2001
+From 66b08413b57832018957aa6c96dea6e3b69f2415 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Sat, 16 Aug 2025 17:07:52 +0200
+Date: Mon, 25 Aug 2025 20:20:52 +0200
 Subject: HDR-variance-boost
 
 Port from svt-av1-hdr of
@@ -11,6 +11,7 @@ https://github.com/juliobbv-p/svt-av1-hdr/commit/0adc02507c54daace40f7c5cc1011cb
 https://github.com/juliobbv-p/svt-av1-hdr/commit/a57642b1a740f79a4b4c906da3c9aa1abb3551b5
 https://github.com/juliobbv-p/svt-av1-hdr/commit/13d5e6023cb99fb25e987bb3124a529dbf9fa72c
 https://github.com/juliobbv-p/svt-av1-hdr/commit/a379f6fdc00d276f6358a7ebbd57b7b8f85aa250
+https://github.com/juliobbv-p/svt-av1-hdr/commit/8b7e64472077a691c188a9b8b1930d05b7053f0c
 
 Signed-off-by: Nomis101 <Nomis101@web.de>
 ---
@@ -21,14 +22,14 @@ Signed-off-by: Nomis101 <Nomis101@web.de>
  Source/Lib/Codec/pcs.c                  |   4 +
  Source/Lib/Codec/pcs.h                  |   3 +-
  Source/Lib/Codec/pic_analysis_process.c | 288 +++---------------------
- Source/Lib/Codec/rc_process.c           | 165 ++++++++++----
+ Source/Lib/Codec/rc_process.c           | 153 ++++++++++---
  Source/Lib/Codec/segmentation.c         |   8 +-
- Source/Lib/Globals/enc_handle.c         |   8 +-
+ Source/Lib/Globals/enc_handle.c         |   9 +-
  Source/Lib/Globals/enc_settings.c       |   4 +-
- 11 files changed, 181 insertions(+), 320 deletions(-)
+ 11 files changed, 175 insertions(+), 315 deletions(-)
 
 diff --git a/Source/API/EbSvtAv1Enc.h b/Source/API/EbSvtAv1Enc.h
-index 97b96c38..6268629d 100644
+index 665b915a..a1afb8d6 100644
 --- a/Source/API/EbSvtAv1Enc.h
 +++ b/Source/API/EbSvtAv1Enc.h
 @@ -1,4 +1,4 @@
@@ -37,7 +38,7 @@ index 97b96c38..6268629d 100644
  * Copyright(c) 2019 Intel Corporation
  *
  * This source code is subject to the terms of the BSD 3-Clause Clear License and
-@@ -913,7 +913,8 @@ typedef struct EbSvtAv1EncConfiguration {
+@@ -912,7 +912,8 @@ typedef struct EbSvtAv1EncConfiguration {
       *  0: default curve
       *  1: low-medium contrast boost curve
       *  2: still picture curve, tuned for SSIMULACRA2 performance on the CID22 Validation Set
@@ -48,7 +49,7 @@ index 97b96c38..6268629d 100644
  
      /* @brief Frame-level luminance-based QP bias to improve quality in low luma scenarios
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index b716703d..59c6d767 100644
+index 39ba0ded..23851606 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
 @@ -1,4 +1,4 @@
@@ -60,7 +61,7 @@ index b716703d..59c6d767 100644
 @@ -958,7 +958,7 @@ ConfigDescription config_entry_variance_boost[] = {
      {ENABLE_VARIANCE_BOOST_TOKEN, "Enable variance boost, default is 0 [0-1]"},
      {VARIANCE_BOOST_STRENGTH_TOKEN, "Variance boost strength, default is 2 [1-4]"},
-     {VARIANCE_OCTILE_TOKEN, "Octile for variance boost, default is 6 [1-8]"},
+     {VARIANCE_OCTILE_TOKEN, "Octile for variance boost, default is 5 [1-8]"},
 -    {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-2]"},
 +    {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-3]"},
      // QP scale compress
@@ -456,7 +457,7 @@ index 6e8881ab..32e43f60 100644
      return return_error;
  }
 diff --git a/Source/Lib/Codec/rc_process.c b/Source/Lib/Codec/rc_process.c
-index 7ca9e800..061464ee 100644
+index 7ca9e800..1f33fd8f 100644
 --- a/Source/Lib/Codec/rc_process.c
 +++ b/Source/Lib/Codec/rc_process.c
 @@ -1528,8 +1528,15 @@ static void generate_b64_me_qindex_map(PictureControlSet *pcs) {
@@ -658,7 +659,7 @@ index 7ca9e800..061464ee 100644
  
          uint8_t normalized_qindex = CLIP3(1, // q_index 0 is lossless, and is currently not supported in SVT-AV1
                                            MAX_Q_INDEX,
-@@ -3608,38 +3649,44 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+@@ -3608,7 +3649,9 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
  
                  if (scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF) {
                      uint8_t scs_qp = scs->static_config.startup_qp_offset != 0 && pcs->ppcs->is_startup_gop
@@ -667,15 +668,10 @@ index 7ca9e800..061464ee 100644
 +                                         (int8_t)scs->static_config.max_qp_allowed,
 +                                         (int8_t)scs->static_config.qp + scs->static_config.startup_qp_offset)
                          : (uint8_t)scs->static_config.qp;
-+                    const int scs_qindex = CLIP3(MIN_Q_INDEX,
-+                                                 MAX_Q_INDEX,
-+                                                 quantizer_to_qindex[scs_qp]);
                      // if RC mode is 0,  fixed QP is used
                      // QP scaling based on POC number for Flat IPPP structure
-                     // make sure no run to run is cause
-                     if (pcs->ppcs->seq_param_changed)
--                        rc->active_worst_quality = quantizer_to_qindex[scs_qp];
-+                        rc->active_worst_quality = scs_qindex;
+@@ -3617,7 +3660,9 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
+                         rc->active_worst_quality = quantizer_to_qindex[scs_qp];
                      frm_hdr->quantization_params.base_q_idx = quantizer_to_qindex[pcs->picture_qp];
                      if (pcs->ppcs->qp_on_the_fly == true) {
 -                        pcs->picture_qp                         = clamp_qp(scs, pcs->ppcs->picture_qp);
@@ -685,39 +681,13 @@ index 7ca9e800..061464ee 100644
                          frm_hdr->quantization_params.base_q_idx = quantizer_to_qindex[pcs->picture_qp];
  
                      } else {
-                         if (scs->enable_qp_scaling_flag) {
--                            const int32_t qindex = quantizer_to_qindex[scs_qp];
-                             // if there are need enough pictures in the LAD/SlidingWindow, the adaptive QP scaling is not used
-                             int32_t new_qindex;
-                             // if CRF
-                             if (pcs->ppcs->tpl_ctrls.enable) {
-                                 if (pcs->picture_number == 0) {
--                                    rc->active_worst_quality = quantizer_to_qindex[scs_qp];
-+                                    rc->active_worst_quality = scs_qindex;
-                                     av1_rc_init(scs);
-                                 }
-                                 new_qindex = crf_qindex_calc(pcs, rc, rc->active_worst_quality);
-                             } else // if CQP
--                                new_qindex = cqp_qindex_calc(pcs, qindex);
-+                                new_qindex = cqp_qindex_calc(pcs, scs_qindex);
-                             frm_hdr->quantization_params.base_q_idx = clamp_qindex(scs, new_qindex);
-                         }
- 
-                         if (scs->static_config.use_fixed_qindex_offsets) {
-                             int32_t qindex = scs->static_config.use_fixed_qindex_offsets == 1
--                                ? quantizer_to_qindex[scs_qp]
-+                                ? scs_qindex
-                                 : frm_hdr->quantization_params
-                                       .base_q_idx; // do not shut the auto QPS if use_fixed_qindex_offsets 2
- 
-@@ -3677,12 +3724,52 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
-                     } else {
+@@ -3678,11 +3723,51 @@ void *svt_aom_rate_control_kernel(void *input_ptr) {
                          chroma_qindex += scs->static_config.chroma_qindex_offsets[pcs->temporal_layer_index];
                      }
-+ 
+ 
 +                    uint8_t chroma_qindex_adjustment = chroma_qindex;
 +                    uint8_t tune2_chroma_qindex;
-+                    
++
 +                    switch (scs->static_config.tune) {
 +                        case 2:
 +                            // Chroma boost function - ramp down for higher qindices
@@ -749,7 +719,7 @@ index 7ca9e800..061464ee 100644
 +                    if (scs->static_config.color_primaries == EB_CICP_CP_BT_2020) {
 +                        chroma_qindex -= CLIP3(0, 8, (chroma_qindex_adjustment / 6) - 8);
 +                    }
- 
++
                      chroma_qindex = clamp_qindex(scs, chroma_qindex);
  
 -                    frm_hdr->quantization_params.delta_q_dc[1]     = frm_hdr->quantization_params.delta_q_dc[2] =
@@ -807,19 +777,20 @@ index 9462571b..d5e1bb34 100644
          // Loop over all 8x8s in a 64x64
          for (var_index = ME_TIER_ZERO_PU_8x8_0; var_index <= ME_TIER_ZERO_PU_8x8_63; var_index++) {
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index f4917e1f..5d0f8a86 100644
+index f4917e1f..f02fbdd7 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -4629,9 +4629,15 @@ static void copy_api_from_app(
+@@ -4629,9 +4629,16 @@ static void copy_api_from_app(
      // Sharpness
      scs->static_config.sharpness = config_struct->sharpness;
  
 -
      // QP scaling compression
      scs->static_config.qp_scale_compress_strength = config_struct->qp_scale_compress_strength;
-+ 
++
 +    // Override Variance Boost curve for PQ transfer
-+    if (scs->static_config.transfer_characteristics == EB_CICP_TC_SMPTE_2084) {
++    if (scs->static_config.enable_variance_boost &&
++        scs->static_config.transfer_characteristics == EB_CICP_TC_SMPTE_2084) {
 +        SVT_INFO("HDR content with PQ transfer detected, switching to PQ-optimized curve\n");
 +        scs->static_config.variance_boost_curve = 3;
 +    }
@@ -828,7 +799,7 @@ index f4917e1f..5d0f8a86 100644
  }
  
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index 41501665..2c2e8802 100644
+index 4dd8f15c..094e43ce 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
 @@ -880,8 +880,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
@@ -843,5 +814,5 @@ index 41501665..2c2e8802 100644
      }
  
 -- 
-2.50.1
+2.51.0
 
