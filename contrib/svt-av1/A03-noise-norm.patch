@@ -116,7 +116,7 @@ index 71af54b1..a9415093 100644
 +        return;
 +
 +    const int              shift      = av1_get_tx_scale_tab[tx_size];
-+    const ScanOrder *const scan_order = &av1_scan_orders[tx_size][tx_type];
++    const ScanOrder *const scan_order = &eb_av1_scan_orders[tx_size][tx_type_to_scan_index[tx_type]];
 +    const int16_t         *scan       = scan_order->scan;
 +
 +    int     best_si                  = -1;
