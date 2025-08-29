@@ -124,12 +124,11 @@ namespace HandBrakeWPF.ViewModels
         private bool keepDuplicateTitles;
         private bool maxDurationEnabled;
         private DefaultRangeMode selectedDefaultRangeMode;
-
         private string queueDoneAction;
-
         private string queueDoneArguments;
-
         private bool queueDoneCustomActionEnabled;
+
+        private PresetUiType selectedPresetUiType;
 
         public OptionsViewModel(
             IUserSettingService userSettingService,
@@ -151,7 +150,7 @@ namespace HandBrakeWPF.ViewModels
             this.OnLoad();
 
             this.SelectedTab = OptionsTab.General;
-            this.UpdateMessage = Resources.OptionsViewModel_CheckForUpdatesMsg;
+           // this.UpdateMessage = Resources.OptionsViewModel_CheckForUpdatesMsg;
             this.RemoveExtensionCommand = new SimpleRelayCommand<string>(this.RemoveExcludedExtension);
         }
 
@@ -203,6 +202,8 @@ namespace HandBrakeWPF.ViewModels
         }
 
         public bool CheckForUpdatesAllowed { get; set; }
+
+        public bool IsUpdateFound { get; set; }
 
         public bool ResetWhenDoneAction
         {
@@ -312,6 +313,23 @@ namespace HandBrakeWPF.ViewModels
                 if (value == this.selectedPresetDisplayMode) return;
                 this.selectedPresetDisplayMode = value;
                 this.NotifyOfPropertyChange(() => this.SelectedPresetDisplayMode);
+            }
+        }
+
+        public BindingList<PresetUiType> PresetUiTypes { get; } = new BindingList<PresetUiType>(EnumHelper<PresetUiType>.GetEnumList().ToList());
+        
+        public PresetUiType SelectedPresetUiType
+        {
+            get => this.selectedPresetUiType;
+            set
+            {
+                if (value == this.selectedPresetUiType)
+                {
+                    return;
+                }
+
+                this.selectedPresetUiType = value;
+                this.NotifyOfPropertyChange(() => this.SelectedPresetUiType);
             }
         }
 
@@ -1184,8 +1202,20 @@ namespace HandBrakeWPF.ViewModels
             {
                 this.updateMessage = value;
                 this.NotifyOfPropertyChange(() => this.UpdateMessage);
+
+                if (!string.IsNullOrEmpty(this.updateMessage))
+                {
+                    IsUpdateMessageSet = true;
+                }
+                else
+                {
+                    this.IsUpdateMessageSet = false;
+                }
+                this.NotifyOfPropertyChange(() => this.IsUpdateMessageSet);
             }
         }
+
+        public bool IsUpdateMessageSet { get; set; }
 
         public bool UpdateAvailable
         {
@@ -1391,6 +1421,8 @@ namespace HandBrakeWPF.ViewModels
         {
             this.UpdateMessage = Resources.OptionsView_CheckingForUpdates;
             this.updateService.CheckForUpdates(this.UpdateCheckComplete);
+            this.IsUpdateFound = true;
+            this.NotifyOfPropertyChange(() =>this.IsUpdateFound);
         }
 
         public void BrowseWhenDoneAudioFile()
@@ -1506,7 +1538,8 @@ namespace HandBrakeWPF.ViewModels
             this.ShowAddSelectionToQueue = this.userSettingService.GetUserSetting<bool>(UserSettingConstants.ShowAddSelectionToQueue);
             this.AppThemeMode = (AppThemeMode)this.userSettingService.GetUserSetting<int>(UserSettingConstants.DarkThemeMode);
             this.SelectedPresetDisplayMode = (PresetDisplayMode)this.userSettingService.GetUserSetting<int>(UserSettingConstants.PresetMenuDisplayMode);
-
+            this.SelectedPresetUiType = (PresetUiType)this.userSettingService.GetUserSetting<int>(UserSettingConstants.PresetUiType);
+            
             // #############################
             // When Done
             // #############################
@@ -1782,6 +1815,8 @@ namespace HandBrakeWPF.ViewModels
             this.userSettingService.SetUserSetting(UserSettingConstants.ShowAddAllToQueue, this.ShowAddAllToQueue);
             this.userSettingService.SetUserSetting(UserSettingConstants.ShowAddSelectionToQueue, this.ShowAddSelectionToQueue);
             this.userSettingService.SetUserSetting(UserSettingConstants.PresetMenuDisplayMode, this.SelectedPresetDisplayMode);
+            this.userSettingService.SetUserSetting(UserSettingConstants.PresetUiType, this.SelectedPresetUiType);
+
 
             /* When Done */
             this.userSettingService.SetUserSetting(UserSettingConstants.WhenCompleteAction, (int)this.WhenDone);
@@ -1878,7 +1913,7 @@ namespace HandBrakeWPF.ViewModels
             this.updateInfo = info;
             if (info.NewVersionAvailable)
             {
-                this.UpdateMessage = Resources.OptionsViewModel_NewUpdate;
+                this.UpdateMessage = string.Format(Resources.OptionsViewModel_NewUpdate, info.Version);
                 this.UpdateAvailable = true;
             }
             else
@@ -1931,6 +1966,10 @@ namespace HandBrakeWPF.ViewModels
                 }
                 catch (Exception exc)
                 {
+                    this.IsUpdateFound = false;
+                    this.UpdateMessage = Resources.Options_UpdateNotComplete;
+                    this.DownloadProgressPercentage = 0;
+                    this.NotifyOfPropertyChange(() => this.IsUpdateFound);
                     Console.WriteLine(exc);
                 }
             }
