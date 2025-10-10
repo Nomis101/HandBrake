@@ -1,6 +1,6 @@
-From 62b081c4213065701b842b9be3403d270223c237 Mon Sep 17 00:00:00 2001
+From ba95848da2c5955be83cbed97b14140c2ee918d5 Mon Sep 17 00:00:00 2001
 From: Nomis101 <Nomis101@web.de>
-Date: Thu, 18 Sep 2025 09:29:58 +0200
+Date: Fri, 3 Oct 2025 23:07:47 +0200
 Subject: HDR-variance-boost
 
 Port from svt-av1-hdr of
@@ -46,7 +46,7 @@ index 03fe15c1..c8fbc7c7 100644
  
      /* @brief Frame-level luminance-based QP bias to improve quality in low luma scenarios
 diff --git a/Source/App/app_config.c b/Source/App/app_config.c
-index 954f5e74..d9a7f4d0 100644
+index ba424547..c13e901c 100644
 --- a/Source/App/app_config.c
 +++ b/Source/App/app_config.c
 @@ -1,4 +1,4 @@
@@ -62,10 +62,10 @@ index 954f5e74..d9a7f4d0 100644
 -    {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-2]"},
 +    {VARIANCE_BOOST_CURVE_TOKEN, "Curve for variance boost, default is 0 [0-3]"},
      // QP scale compress
-     {QP_SCALE_COMPRESS_STRENGTH_TOKEN, "QP scale compress strength, default is 1 [0-3]"},
+     {QP_SCALE_COMPRESS_STRENGTH_TOKEN, "QP scale compress strength, default is 0 [0-3]"},
      // Adaptive film grain
 diff --git a/Source/Lib/Codec/entropy_coding.c b/Source/Lib/Codec/entropy_coding.c
-index 6ab0139d..58fefc5d 100644
+index b7aa82c1..38c48bb2 100644
 --- a/Source/Lib/Codec/entropy_coding.c
 +++ b/Source/Lib/Codec/entropy_coding.c
 @@ -2343,9 +2343,7 @@ static void encode_quantization(const PictureParentControlSet *const pcs, struct
@@ -106,7 +106,7 @@ index f9058b2e..63af8968 100644
      int32_t qmatrix_level = (IS_2D_TRANSFORM(tx_type) && pcs->ppcs->frm_hdr.quantization_params.using_qmatrix)
          ? pcs->ppcs->frm_hdr.quantization_params.qm[plane]
 diff --git a/Source/Lib/Codec/md_config_process.c b/Source/Lib/Codec/md_config_process.c
-index 9cee97b2..4501ae14 100644
+index ae08f7aa..996c1b35 100644
 --- a/Source/Lib/Codec/md_config_process.c
 +++ b/Source/Lib/Codec/md_config_process.c
 @@ -188,7 +188,7 @@ void svt_av1_build_quantizer(PictureParentControlSet *pcs, EbBitDepth bit_depth,
@@ -119,7 +119,7 @@ index 9cee97b2..4501ae14 100644
  
  // Polynomial to determine QM levels tuned for still images
 diff --git a/Source/Lib/Codec/pcs.c b/Source/Lib/Codec/pcs.c
-index feb01192..5df3d6d0 100644
+index 043498eb..23aac5cd 100644
 --- a/Source/Lib/Codec/pcs.c
 +++ b/Source/Lib/Codec/pcs.c
 @@ -1129,6 +1129,9 @@ static void picture_parent_control_set_dctor(EbPtr ptr) {
@@ -141,10 +141,10 @@ index feb01192..5df3d6d0 100644
      }
      if (init_data_ptr->calc_hist) {
 diff --git a/Source/Lib/Codec/pcs.h b/Source/Lib/Codec/pcs.h
-index ee687ad3..3194fb76 100644
+index 50aece4a..1687f0d2 100644
 --- a/Source/Lib/Codec/pcs.h
 +++ b/Source/Lib/Codec/pcs.h
-@@ -775,7 +775,8 @@ typedef struct PictureParentControlSet {
+@@ -777,7 +777,8 @@ typedef struct PictureParentControlSet {
      // Pre Analysis
      EbObjectWrapper *ref_pa_pic_ptr_array[MAX_NUM_OF_REF_PIC_LIST][REF_LIST_MAX_DEPTH];
      uint64_t         ref_pic_poc_array[MAX_NUM_OF_REF_PIC_LIST][REF_LIST_MAX_DEPTH];
@@ -155,10 +155,10 @@ index ee687ad3..3194fb76 100644
      uint16_t         pic_avg_variance;
  
 diff --git a/Source/Lib/Codec/pic_analysis_process.c b/Source/Lib/Codec/pic_analysis_process.c
-index 9f8f6c15..cafcb888 100644
+index 3e41117b..05ed742a 100644
 --- a/Source/Lib/Codec/pic_analysis_process.c
 +++ b/Source/Lib/Codec/pic_analysis_process.c
-@@ -1101,6 +1101,9 @@ static EbErrorType compute_block_mean_compute_variance(
+@@ -1102,6 +1102,9 @@ static EbErrorType compute_block_mean_compute_variance(
      mean_of_64x64_blocks = (mean_of_32x32_blocks[0] + mean_of_32x32_blocks[1] + mean_of_32x32_blocks[2] +
                              mean_of_32x32_blocks[3]) >>
          2;
@@ -168,7 +168,7 @@ index 9f8f6c15..cafcb888 100644
      mean_of64x64_squared_values_blocks = (mean_of32x32_squared_values_blocks[0] +
                                            mean_of32x32_squared_values_blocks[1] +
                                            mean_of32x32_squared_values_blocks[2] +
-@@ -1108,273 +1111,36 @@ static EbErrorType compute_block_mean_compute_variance(
+@@ -1109,273 +1112,36 @@ static EbErrorType compute_block_mean_compute_variance(
          2;
      // 8x8 variances
      if (scs->static_config.enable_adaptive_quantization == 1 || scs->static_config.variance_octile) {
@@ -769,10 +769,10 @@ index 9462571b..d5e1bb34 100644
          // Loop over all 8x8s in a 64x64
          for (var_index = ME_TIER_ZERO_PU_8x8_0; var_index <= ME_TIER_ZERO_PU_8x8_63; var_index++) {
 diff --git a/Source/Lib/Globals/enc_handle.c b/Source/Lib/Globals/enc_handle.c
-index 33bde949..02103a58 100644
+index 6c6c42b9..50c4648e 100644
 --- a/Source/Lib/Globals/enc_handle.c
 +++ b/Source/Lib/Globals/enc_handle.c
-@@ -4656,6 +4656,13 @@ static void copy_api_from_app(
+@@ -4650,6 +4650,13 @@ static void copy_api_from_app(SequenceControlSet *scs, EbSvtAv1EncConfiguration
  
      // QP scaling compression
      scs->static_config.qp_scale_compress_strength = config_struct->qp_scale_compress_strength;
@@ -787,7 +787,7 @@ index 33bde949..02103a58 100644
      // Adaptive film grain
      scs->static_config.adaptive_film_grain = config_struct->adaptive_film_grain;
 diff --git a/Source/Lib/Globals/enc_settings.c b/Source/Lib/Globals/enc_settings.c
-index 8343564c..458c1d5f 100644
+index 35d0fbcd..6195f411 100644
 --- a/Source/Lib/Globals/enc_settings.c
 +++ b/Source/Lib/Globals/enc_settings.c
 @@ -897,8 +897,8 @@ EbErrorType svt_av1_verify_settings(SequenceControlSet *scs) {
